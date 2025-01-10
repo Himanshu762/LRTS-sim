@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Auto-Rickshaw Simulation</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css"/>
+    <style>
+        body {
+            background-color: #f8f9fa;
+        }
+        #map {
+            height: 100vh;
+            width: 100%;
+            position: fixed;
+            top: 0;
+            left: 0;
+        }
+        .overlay-container {
+            position: fixed;
+            top: 1rem;
+            right: 1rem;
+            z-index: 1000;
+            width: 320px;
+            max-width: 90vw;
+            overflow-y: auto;
+            max-height: 90vh;
+        }
+        .status-panel {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+            backdrop-filter: blur(10px);
+            margin-bottom: 1rem;
+            padding: 1rem;
+        }
+        .legend {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+            backdrop-filter: blur(10px);
+            padding: 1rem;
+        }
+        .status-header {
+            background: #4a5568;
+            color: white;
+            padding: 0.75rem;
+            border-radius: 12px 12px 0 0;
+            font-weight: 600;
+            text-align: center;
+        }
+        .legend-header {
+            background: #4a5568;
+            color: white;
+            padding: 0.75rem;
+            border-radius: 12px 12px 0 0;
+            font-weight: 600;
+            text-align: center;
+        }
+        .status-item, .legend-item {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 0.5rem;
+        }
+        .legend-color {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            margin-right: 0.5rem;
+            display: inline-block;
+        }
+        /* Additional styles for status and legend content */
+        #capacity-chart {
+            width: 100%;
+            height: 200px;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            margin: 5px 0;
+        }
+        .legend-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 8px;
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+
+    <div class="overlay-container">
+        <div class="status-panel">
+            <div class="status-header">
+                Simulation Status
+            </div>
+            <div class="status-content">
+                <div class="status-item">
+                    <span class="status-label">Time</span>
+                    <span class="status-value" id="time">Loading...</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">Active Autos</span>
+                    <span class="status-value" id="active-autos">Loading...</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">Pending Requests</span>
+                    <span class="status-value" id="pending-requests">Loading...</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">Picked Requests</span>
+                    <span class="status-value" id="picked-requests">Loading...</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">Completed Requests</span>
+                    <span class="status-value" id="completed-requests">Loading...</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">Ride Sharing</span>
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="rideSharingToggle">
+                        <label class="form-check-label" for="rideSharingToggle">Enable</label>
+                    </div>
+                </div>
+                <!-- Capacity Estimation Graph -->
+                <div class="status-item">
+                    <span class="status-label">Capacity Estimation</span>
+                </div>
+                <canvas id="capacity-chart"></canvas>
+            </div>
+        </div>
+
+        <div class="legend">
+            <div class="legend-header">
+                Legend
+            </div>
+            <div class="legend-content">
+                <div class="legend-item">
+                    <span class="legend-color" style="background: #00ff00"></span>
+                    <span>Idle Auto</span>
+                </div>
+                <div class="legend-item">
+                    <span class="legend-color" style="background: #ff0000"></span>
+                    <span>Moving to Pickup</span>
+                </div>
+                <div class="legend-item">
+                    <span class="legend-color" style="background: #0000ff"></span>
+                    <span>Moving to Dropoff</span>
+                </div>
+                <div class="legend-item">
+                    <span class="legend-color" style="background: #000000"></span>
+                    <span>Pending Request</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Translucent Circular Zone -->
+        <div id="circular-zone"></div>
+    </div>
+
+    <!-- JavaScript Dependencies -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script> <!-- For capacity graph -->
+    <script>
+        // Initialize map
+        const map = L.map('map').setView([28.6438, 77.1129], 13); // Tagore Garden coordinates
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+
+        // Add translucent circular zone
+        const circle = L.circle([28.6438, 77.1129], {
+            color: '#3388ff',
+            fillColor: '#3388ff',
+            fillOpacity: 0.2,
+            radius: 4000 // 4 km
+        }).addTo(map);
+
+        // Store markers and routes
+        const autoMarkers = {};
+        const requestMarkers = {};
+        const autoRoutes = {};
+        let capacityChart; // Chart.js instance
+
+        // Auto marker colors based on status
+        const statusColors = {
+            'idle': '#00ff00',
+            'moving_to_pickup': '#ff0000',
+            'moving_to_dropoff': '#0000ff'
+        };
+
+        // Initialize Capacity Estimation Chart
+        const ctx = document.getElementById('capacity-chart').getContext('2d');
+        capacityChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [], // Time labels in minutes
+                datasets: [{
+                    label: 'Total Capacity',
+                    data: [],
+                    borderColor: 'rgba(75, 192, 192, 1)',
+                    backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                    fill: true,
+                    tension: 0.1
+                }]
+            },
+            options: {
+                responsive: true,
+                scales: {
+                    x: {
+                        title: {
+                            display: true,
+                            text: 'Time (minutes)'
+                        }
+                    },
+                    y: {
+                        title: {
+                            display: true,
+                            text: 'Total Capacity'
+                        },
+                        beginAtZero: true
+                    }
+                }
+            }
+        });
+
+        function createCircleMarker(latlng, color, label) {
+            const marker = L.circleMarker(latlng, {
+                radius: 8,
+                fillColor: color,
+                color: '#fff',
+                weight: 2,
+                opacity: 1,
+                fillOpacity: 0.8
+            });
+            
+            if (label) {
+                marker.bindTooltip(label, {
+                    permanent: true,
+                    direction: 'center',
+                    className: 'auto-label'
+                });
+            }
+            
+            return marker;
+        }
+
+        function updateAutoMarker(auto) {
+            const colors = {
+                'idle': '#0000ff',
+                'moving_to_pickup': '#ff0000',
+                'moving_to_dropoff': '#00ff00'
+            };
+            
+            const color = colors[auto.status];
+            const autoInfo = `Auto ${auto.id}<br>` +
+                            `Status: ${auto.status.replace(/_/g, ' ').toUpperCase()}<br>` +
+                            `Passengers: ${auto.passenger_ids.length > 0 ? auto.passenger_ids.join(', ') : 'None'}<br>` +
+                            `Assigned Requests: ${auto.passenger_ids.length > 0 ? 
+                                `Pickup/Dropoff IDs: ${auto.passenger_ids.join(', ')}` : 'None'}`;
+            
+            if (autoMarkers[auto.id]) {
+                autoMarkers[auto.id].setLatLng(auto.location);
+                autoMarkers[auto.id].setStyle({ fillColor: color });
+                autoMarkers[auto.id].getPopup().setContent(autoInfo);
+            } else {
+                const marker = L.circleMarker(auto.location, {
+                    radius: 8,
+                    fillColor: color,
+                    color: '#fff',
+                    weight: 2,
+                    opacity: 1,
+                    fillOpacity: 0.8
+                });
+                marker.bindPopup(autoInfo);
+                marker.addTo(map);
+                autoMarkers[auto.id] = marker;
+            }
+            
+            // Update routes
+            if (auto.route && auto.route.length > 1) {
+                if (autoRoutes[auto.id]) {
+                    map.removeLayer(autoRoutes[auto.id]);
+                }
+                const routeStyle = {
+                    color: color,
+                    weight: 3,
+                    opacity: 0.6,
+                    dashArray: auto.status === 'moving_to_pickup' ? '10, 10' : null
+                };
+                const route = L.polyline(auto.route, routeStyle).addTo(map);
+                autoRoutes[auto.id] = route;
+            }
+        }
+
+        function updateRequestMarker(request) {
+            const requestLatLng = [request.pickup[0], request.pickup[1]];
+            
+            // Remove completed request markers
+            if (request.status === 'completed') {
+                if (requestMarkers[request.id]) {
+                    map.removeLayer(requestMarkers[request.id]);
+                    delete requestMarkers[request.id];
+                }
+                return;
+            }
+            
+            // Remove or update markers for picked up passengers
+            if (request.status === 'in_vehicle') {
+                if (requestMarkers[request.id]) {
+                    map.removeLayer(requestMarkers[request.id]);
+                    delete requestMarkers[request.id];
+                }
+                return;
+            }
+            
+            const requestInfo = `Request ${request.id}<br>` +
+                               `Status: ${request.status.toUpperCase()}<br>` +
+                               `${request.assigned_auto !== null ? 
+                                 'Assigned to Auto: ' + request.assigned_auto : 'Waiting for assignment'}`;
+            
+            // Update or create markers for waiting/assigned requests
+            if (requestMarkers[request.id]) {
+                requestMarkers[request.id].setLatLng(requestLatLng);
+                requestMarkers[request.id].getPopup().setContent(requestInfo);
+            } else {
+                const marker = L.circleMarker(requestLatLng, {
+                    radius: 6,
+                    fillColor: '#000000',  // Always black for consistency
+                    color: '#FFFFFF',
+                    weight: 2,
+                    opacity: 1,
+                    fillOpacity: 0.8
+                });
+                marker.bindPopup(requestInfo);
+                marker.addTo(map);
+                requestMarkers[request.id] = marker;
+            }
+        }
+
+        function updateCapacityGraph(totalCapacity) {
+            const currentTime = Math.floor((new Date().getTime() - startTime) / 60000); // Minutes since start
+            if (currentTime <= 180) { // 3 hours = 180 minutes
+                if (!capacityChart.data.labels.includes(currentTime.toString())) {
+                    capacityChart.data.labels.push(currentTime.toString());
+                    capacityChart.data.datasets[0].data.push(totalCapacity);
+                    capacityChart.update();
+                }
+            } else {
+                // Remove the oldest data point
+                capacityChart.data.labels.shift();
+                capacityChart.data.datasets[0].data.shift();
+                // Add the new data point
+                capacityChart.data.labels.push(currentTime.toString());
+                capacityChart.data.datasets[0].data.push(totalCapacity);
+                capacityChart.update();
+            }
+        }
+
+        let startTime = new Date().getTime();
+
+        function updateSimulation() {
+            fetch('/simulation_state')
+                .then(response => response.json())
+                .then(data => {
+                    // Update statistics
+                    document.getElementById('time').textContent = `${Math.floor(data.time)}s`;
+                    document.getElementById('active-autos').textContent = 
+                        `${data.autos.filter(a => a.status !== 'idle').length}/${data.autos.length}`;
+                    document.getElementById('pending-requests').textContent = 
+                        `${data.requests.filter(r => r.status === 'waiting').length}`;
+                    document.getElementById('picked-requests').textContent = 
+                        `${data.picked_up_count}`;
+                    document.getElementById('completed-requests').textContent = 
+                        `${data.completed_count}`;
+                    document.getElementById('ride-sharing').textContent = 
+                        `${data.ride_sharing ? 'Enabled' : 'Disabled'}`;
+
+                    // Calculate total capacity based on current assignments
+                    const totalCapacity = data.autos.length * 4; // Each auto has a capacity of 4
+                    updateCapacityGraph(totalCapacity);
+
+                    // Update auto markers and routes
+                    data.autos.forEach(auto => {
+                        updateAutoMarker({
+                            id: auto.id,
+                            location: auto.location,
+                            status: auto.status.toLowerCase(),
+                            route: auto.route,
+                            passenger_ids: auto.passenger_ids
+                        });
+                    });
+                    
+                    // Update request markers
+                    data.requests.forEach(request => {
+                        updateRequestMarker({
+                            id: request.id,
+                            pickup: request.pickup,
+                            status: request.status.toLowerCase(),
+                            assigned_auto: request.assigned_auto
+                        });
+                    });
+                })
+                .catch(error => {
+                    console.error('Error fetching simulation state:', error);
+                });
+        }
+
+        // Initialize map and overlays
+        setInterval(updateSimulation, 1000); // Update every second
+        updateSimulation(); // Initial call to populate data
+
+        // Add this after map initialization
+        const rideSharingToggle = document.getElementById('rideSharingToggle');
+        rideSharingToggle.addEventListener('change', function() {
+            fetch('/toggle_ride_sharing', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    enabled: this.checked
+                })
+            });
+        });
+
+        // Separate update functions for different components
+        function updateMapVisuals() {
+            fetch('/simulation_state')
+                .then(response => response.json())
+                .then(data => {
+                    // Update only map-related elements
+                    data.autos.forEach(auto => {
+                        updateAutoMarker({
+                            id: auto.id,
+                            location: auto.location,
+                            status: auto.status.toLowerCase(),
+                            route: auto.route,
+                            passenger_ids: auto.passenger_ids
+                        });
+                    });
+                    
+                    data.requests.forEach(request => {
+                        updateRequestMarker({
+                            id: request.id,
+                            pickup: request.pickup,
+                            status: request.status.toLowerCase(),
+                            assigned_auto: request.assigned_auto
+                        });
+                    });
+                });
+        }
+
+        function updateStatisticsAndGraph() {
+            fetch('/simulation_state')
+                .then(response => response.json())
+                .then(data => {
+                    // Update statistics and graph
+                    document.getElementById('time').textContent = `${Math.floor(data.time)}s`;
+                    document.getElementById('active-autos').textContent = 
+                        `${data.autos.filter(a => a.status !== 'idle').length}/${data.autos.length}`;
+                    document.getElementById('pending-requests').textContent = 
+                        `${data.requests.filter(r => r.status === 'waiting').length}`;
+                    document.getElementById('picked-requests').textContent = 
+                        `${data.picked_up_count}`;
+                    document.getElementById('completed-requests').textContent = 
+                        `${data.completed_count}`;
+                    
+                    updateCapacityGraph(data.autos.length * 3);  // Updated to reflect max 3 passengers
+                });
+        }
+
+        // Set different update intervals for visuals and statistics
+        setInterval(updateMapVisuals, 200);  // Update visuals every 0.2 seconds
+        setInterval(updateStatisticsAndGraph, 1000);  // Update statistics every second
+
+        // Add after map initialization
+        const metroIcon = L.divIcon({
+            className: 'metro-marker',
+            html: '<i class="fas fa-subway"></i>',
+            iconSize: [30, 30],
+            iconAnchor: [15, 15]
+        });
+
+        const metroMarker = L.marker([28.6438, 77.1129], {
+            icon: metroIcon,
+            zIndexOffset: 1000  // Keep metro marker on top
+        }).addTo(map);
+
+    </script>
+</body>
+</html>
