@@ -1,8 +1,0 @@
-flask
-folium
-osmnx
-networkx
-ortools
-gunicorn
-supabase
-python-dotenv 
