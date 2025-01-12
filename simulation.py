@@ -172,17 +172,26 @@ class SimulationManager:
         # Check if route is completed
         if auto.route_index >= len(auto.route):
             if auto.status == AutoStatus.MOVING_TO_PICKUP:
-                # Pick up passenger
-                request = next(r for r in auto.current_passengers if r.status == RideStatus.ASSIGNED)
-                request.status = RideStatus.IN_VEHICLE
+                # Try to find an assigned passenger
+                assigned_passengers = [r for r in auto.current_passengers if r.status == RideStatus.ASSIGNED]
                 
-                if len(auto.pickup_queue) > 0:
-                    # If more pickups queued, go to next pickup
-                    next_pickup = auto.pickup_queue.pop(0)
-                    auto.route = nx.shortest_path(self.G, auto.current_node, next_pickup.pickup_node, weight='travel_time')
-                    auto.route_index = 0
+                if assigned_passengers:
+                    # Pick up passenger
+                    request = assigned_passengers[0]
+                    request.status = RideStatus.IN_VEHICLE
+                    
+                    if len(auto.pickup_queue) > 0:
+                        # If more pickups queued, go to next pickup
+                        next_pickup = auto.pickup_queue.pop(0)
+                        auto.route = nx.shortest_path(self.G, auto.current_node, next_pickup.pickup_node, weight='travel_time')
+                        auto.route_index = 0
+                    else:
+                        # No more pickups, head to metro station
+                        auto.status = AutoStatus.MOVING_TO_DROPOFF
+                        auto.route = nx.shortest_path(self.G, auto.current_node, self.metro_node, weight='travel_time')
+                        auto.route_index = 0
                 else:
-                    # No more pickups, head to metro station
+                    # No assigned passengers found, return to metro station
                     auto.status = AutoStatus.MOVING_TO_DROPOFF
                     auto.route = nx.shortest_path(self.G, auto.current_node, self.metro_node, weight='travel_time')
                     auto.route_index = 0
