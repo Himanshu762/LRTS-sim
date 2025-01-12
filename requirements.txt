@@ -1,6 +1,11 @@
-Flask==2.0.1
-folium==0.12.1
-osmnx==1.1.1
-networkx==2.6.3
-ortools==9.3.10497
-gunicorn==20.1.0 
+Flask==3.0.2
+folium==0.15.1
+osmnx==1.9.1
+networkx==3.2.1
+ortools==9.9.3963
+gunicorn==21.2.0
+numpy==1.26.4
+geopandas==0.14.3
+pandas==2.2.1
+Shapely==2.0.3
+Rtree==1.2.0 
