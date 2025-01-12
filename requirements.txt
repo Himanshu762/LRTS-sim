@@ -1,0 +1,6 @@
+Flask==2.0.1
+folium==0.12.1
+osmnx==1.1.1
+networkx==2.6.3
+ortools==9.3.10497
+gunicorn==20.1.0 

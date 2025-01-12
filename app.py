@@ -4,84 +4,31 @@ import osmnx as ox
 import networkx as nx
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 from simulation import SimulationManager
-import os
-from supabase import create_client, Client
-from dotenv import load_dotenv
-
-# Load environment variables
-load_dotenv()
-
-# Initialize Supabase with error handling
-try:
-    supabase_url = os.getenv("SUPABASE_URL")
-    supabase_key = os.getenv("SUPABASE_KEY")
-    
-    if not supabase_url or not supabase_key:
-        raise ValueError("Supabase credentials not found in environment variables")
-        
-    supabase = create_client(supabase_url, supabase_key)
-except Exception as e:
-    print(f"Error initializing Supabase: {e}")
-    supabase = None
+import threading
+import time
 
 app = Flask(__name__)
 
-# Initialize simulation with state management
-def get_or_create_simulation():
-    if not supabase:
-        # Fallback to local-only simulation if Supabase is not available
-        return SimulationManager(metro_station=(28.6438, 77.1129))
-    
-    try:
-        response = supabase.table('simulation_state').select('*').execute()
-        
-        if response.data:
-            state = response.data[0]
-            simulation = SimulationManager(
-                metro_station=(28.6438, 77.1129),
-                state=state
-            )
-        else:
-            simulation = SimulationManager(metro_station=(28.6438, 77.1129))
-            supabase.table('simulation_state').insert({
-                'time': simulation.simulation_time,
-                'request_counter': simulation.request_counter,
-                'enable_ride_sharing': simulation.enable_ride_sharing
-            }).execute()
-    except Exception as e:
-        print(f"Error accessing Supabase: {e}")
-        simulation = SimulationManager(metro_station=(28.6438, 77.1129))
-    
-    return simulation
+# Initialize simulation
+DELHI_METRO_STATION = (28.6438, 77.1129)  # Changed to Tagore Garden Metro Station
+simulation = SimulationManager(metro_station=DELHI_METRO_STATION)
+
+def run_simulation():
+    while True:
+        if simulation.is_running:
+            simulation.simulation_step()
+        time.sleep(1)
+
+# Start simulation in background thread
+simulation_thread = threading.Thread(target=run_simulation, daemon=True)
+simulation_thread.start()
 
 @app.route('/')
 def index():
     # Render the main map page
-    initial_location = [28.6438, 77.1129]  # Tagore Garden location
-    map_obj = folium.Map(location=initial_location, zoom_start=12)
-    
-    # Add the circular zone to the map
-    folium.Circle(
-        location=initial_location,
-        radius=4000,  # 4 km
-        color='blue',
-        fill=True,
-        fill_opacity=0.2
-    ).add_to(map_obj)
-    
-    # Add metro station marker
-    folium.CircleMarker(
-        location=initial_location,
-        radius=8,
-        color='#FFD700',  # Gold border
-        fill=True,
-        fill_color='#FF4500',  # Orange-Red fill
-        fill_opacity=1.0,
-        weight=2,
-        popup='Tagore Garden Metro Station'
-    ).add_to(map_obj)
-    
-    return render_template('index.html', map=map_obj._repr_html_())
+    initial_location = [28.6438, 77.1129]  # Default location (Delhi)
+    map = folium.Map(location=initial_location, zoom_start=12)
+    return render_template('index.html', map=map._repr_html_())
 
 @app.route('/optimize_route', methods=['POST'])
 def optimize_route():
@@ -147,33 +94,56 @@ def optimize_route():
 
 @app.route('/simulation_state')
 def get_simulation_state():
-    simulation = get_or_create_simulation()
     state = simulation.get_simulation_state()
     
-    if supabase:
-        try:
-            supabase.table('simulation_state').update({
-                'time': state['time'],
-                'request_counter': simulation.request_counter,
-                'enable_ride_sharing': simulation.enable_ride_sharing
-            }).eq('id', 1).execute()
-        except Exception as e:
-            print(f"Error updating Supabase: {e}")
+    # Count picked up and completed requests
+    picked_up_count = len([r for r in state['requests'].values() 
+                          if r.status.value == 'in_vehicle'])
+    completed_count = len([r for r in state['requests'].values() 
+                          if r.status.value == 'completed'])
     
-    return jsonify(state)
+    return jsonify({
+        'time': state['time'],
+        'autos': [
+            {
+                'id': auto.id,
+                'location': auto.current_loc,
+                'status': auto.status.value,
+                'passenger_ids': [p.id for p in auto.current_passengers],
+                'route': [(simulation.G.nodes[node]['y'], simulation.G.nodes[node]['x']) 
+                         for node in (auto.route or [])] if auto.route else [],
+                'pickup_queue': [
+                    {
+                        'id': req.id,
+                        'route': [(simulation.G.nodes[node]['y'], simulation.G.nodes[node]['x']) 
+                                for node in nx.shortest_path(simulation.G, auto.current_node, req.pickup_node, weight='travel_time')]
+                    } for req in auto.pickup_queue
+                ] if auto.pickup_queue else []
+            } for auto in state['autos'].values()
+        ],
+        'requests': [
+            {
+                'id': req.id,
+                'pickup': req.pickup_loc,
+                'status': req.status.value,
+                'assigned_auto': req.assigned_auto
+            } for req in state['requests'].values()
+        ],
+        'ride_sharing': state['ride_sharing'],
+        'picked_up_count': picked_up_count,
+        'completed_count': completed_count
+    })
 
-@app.route('/toggle_ride_sharing', methods=['POST'])
-def toggle_ride_sharing():
-    simulation = get_or_create_simulation()
+@app.route('/set_ride_sharing', methods=['POST'])
+def set_ride_sharing():
     data = request.json
-    simulation.enable_ride_sharing = data.get('enabled', False)
-    
-    # Update in Supabase
-    supabase.table('simulation_state').update({
-        'enable_ride_sharing': simulation.enable_ride_sharing
-    }).eq('id', 1).execute()
-    
-    return jsonify({'success': True})
+    simulation.enable_ride_sharing = data.get('enable_ride_sharing', False)
+    return jsonify({'ride_sharing': simulation.enable_ride_sharing})
+
+@app.route('/toggle_simulation', methods=['POST'])
+def toggle_simulation():
+    simulation.is_running = not simulation.is_running
+    return jsonify({'is_running': simulation.is_running})
 
 if __name__ == '__main__':
     app.run(debug=True)
