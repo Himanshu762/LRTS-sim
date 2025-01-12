@@ -1,5 +1,8 @@
 from flask import Flask, render_template, request, jsonify
 import folium
+import osmnx as ox
+import networkx as nx
+from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 from simulation import SimulationManager
 import threading
 import time
@@ -7,20 +10,16 @@ import time
 app = Flask(__name__)
 
 # Initialize simulation
-DELHI_METRO_STATION = (28.6438, 77.1129)
+DELHI_METRO_STATION = (28.6438, 77.1129)  # Changed to Tagore Garden Metro Station
 simulation = SimulationManager(metro_station=DELHI_METRO_STATION)
 
 def run_simulation():
     while True:
-        try:
-            if simulation.is_running:
-                simulation.simulation_step()
-            time.sleep(1)
-        except Exception as e:
-            print(f"Simulation error: {e}")
-            continue
+        if simulation.is_running:
+            simulation.simulation_step()
+        time.sleep(1)
 
-# Create a daemon thread that won't block the main application
+# Start simulation in background thread
 simulation_thread = threading.Thread(target=run_simulation, daemon=True)
 simulation_thread.start()
 
@@ -30,37 +29,71 @@ def index():
     initial_location = [28.6438, 77.1129]  # Default location (Delhi)
     map = folium.Map(location=initial_location, zoom_start=12)
     return render_template('index.html', map=map._repr_html_())
-
 @app.route('/optimize_route', methods=['POST'])
 def optimize_route():
     data = request.json
-    pickup = data.get('pickup')
-    dropoffs = data.get('dropoffs')
+    pickup = data.get('pickup')  # [lat, lon]
+    dropoffs = data.get('dropoffs')  # List of [lat, lon]
 
     if not pickup or not dropoffs:
         return jsonify({'error': 'Invalid data provided.'}), 400
 
-    # Use SimpleGraph for routing
-    path_coords = []
-    current_point = pickup
-    
-    for dropoff in dropoffs:
-        start_node = simulation.G.nearest_node(current_point[0], current_point[1])
-        end_node = simulation.G.nearest_node(dropoff[0], dropoff[1])
-        
-        path = simulation.G.shortest_path(start_node, end_node)
-        path_coords.extend([
-            (simulation.G.nodes[node]['y'], simulation.G.nodes[node]['x']) 
-            for node in path
-        ])
-        current_point = dropoff
+    # Create the road network
+    G = ox.graph_from_point(pickup, dist=10000, network_type="drive")
+    G = ox.add_edge_speeds(G)
+    G = ox.add_edge_travel_times(G)
 
-    return jsonify({'route': path_coords})
+    # Find the nearest nodes to pickup and drop-off points
+    pickup_node = ox.distance.nearest_nodes(G, pickup[1], pickup[0])
+    dropoff_nodes = [ox.distance.nearest_nodes(G, point[1], point[0]) for point in dropoffs]
+    all_nodes = [pickup_node] + dropoff_nodes
 
+    # Create distance matrix
+    def compute_distance(a, b):
+        try:
+            return nx.shortest_path_length(G, source=a, target=b, weight='travel_time')
+        except:
+            return float('inf')
+
+    distance_matrix = [[compute_distance(a, b) for b in all_nodes] for a in all_nodes]
+
+    # Solve VRP using OR-Tools
+    manager = pywrapcp.RoutingIndexManager(len(all_nodes), 1, 0)
+    model = pywrapcp.RoutingModel(manager)
+
+    def distance_callback(from_index, to_index):
+        from_node = manager.IndexToNode(from_index)
+        to_node = manager.IndexToNode(to_index)
+        return distance_matrix[from_node][to_node]
+    transit_callback_index = model.RegisterTransitCallback(distance_callback)
+    model.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
+
+    search_parameters = pywrapcp.DefaultRoutingSearchParameters()
+    search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+    solution = model.SolveWithParameters(search_parameters)
+
+    # Extract the solution
+    route = []
+    if solution:
+        index = model.Start(0)
+        while not model.IsEnd(index):
+            route.append(manager.IndexToNode(index))
+            index = solution.Value(model.NextVar(index))
+
+    optimized_path = [all_nodes[i] for i in route]
+
+    # Get the full path for visualization
+    full_path_coords = []
+    for i in range(len(optimized_path) - 1):
+        sub_path = nx.shortest_path(G, source=optimized_path[i], target=optimized_path[i + 1], weight='travel_time')
+        full_path_coords.extend([(G.nodes[node]['y'], G.nodes[node]['x']) for node in sub_path])
+
+    return jsonify({'route': full_path_coords})
 @app.route('/simulation_state')
 def get_simulation_state():
     state = simulation.get_simulation_state()
     
+    # Count picked up and completed requests
     picked_up_count = len([r for r in state['requests'].values() 
                           if r.status.value == 'in_vehicle'])
     completed_count = len([r for r in state['requests'].values() 
@@ -74,23 +107,13 @@ def get_simulation_state():
                 'location': auto.current_loc,
                 'status': auto.status.value,
                 'passenger_ids': [p.id for p in auto.current_passengers],
-                'route': [
-                    {
-                        'lat': simulation.G.nodes[node]['y'],
-                        'lng': simulation.G.nodes[node]['x']
-                    }
-                    for node in (auto.route or [])
-                ] if auto.route else [],
+                'route': [(simulation.G.nodes[node]['y'], simulation.G.nodes[node]['x']) 
+                         for node in (auto.route or [])] if auto.route else [],
                 'pickup_queue': [
                     {
                         'id': req.id,
-                        'route': [
-                            {
-                                'lat': simulation.G.nodes[node]['y'],
-                                'lng': simulation.G.nodes[node]['x']
-                            }
-                            for node in simulation.G.shortest_path(auto.current_node, req.pickup_node)
-                        ]
+                        'route': [(simulation.G.nodes[node]['y'], simulation.G.nodes[node]['x']) 
+                                for node in nx.shortest_path(simulation.G, auto.current_node, req.pickup_node, weight='travel_time')]
                     } for req in auto.pickup_queue
                 ] if auto.pickup_queue else []
             } for auto in state['autos'].values()
@@ -107,7 +130,6 @@ def get_simulation_state():
         'picked_up_count': picked_up_count,
         'completed_count': completed_count
     })
-
 @app.route('/set_ride_sharing', methods=['POST'])
 def set_ride_sharing():
     data = request.json
