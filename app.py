@@ -74,13 +74,23 @@ def get_simulation_state():
                 'location': auto.current_loc,
                 'status': auto.status.value,
                 'passenger_ids': [p.id for p in auto.current_passengers],
-                'route': [(simulation.G.nodes[node]['y'], simulation.G.nodes[node]['x']) 
-                         for node in (auto.route or [])] if auto.route else [],
+                'route': [
+                    {
+                        'lat': simulation.G.nodes[node]['y'],
+                        'lng': simulation.G.nodes[node]['x']
+                    }
+                    for node in (auto.route or [])
+                ] if auto.route else [],
                 'pickup_queue': [
                     {
                         'id': req.id,
-                        'route': [(simulation.G.nodes[node]['y'], simulation.G.nodes[node]['x']) 
-                                for node in simulation.G.shortest_path(auto.current_node, req.pickup_node)]
+                        'route': [
+                            {
+                                'lat': simulation.G.nodes[node]['y'],
+                                'lng': simulation.G.nodes[node]['x']
+                            }
+                            for node in simulation.G.shortest_path(auto.current_node, req.pickup_node)
+                        ]
                     } for req in auto.pickup_queue
                 ] if auto.pickup_queue else []
             } for auto in state['autos'].values()

@@ -62,7 +62,7 @@ class SimpleGraph:
             (self.nodes[node2]['y'], self.nodes[node2]['x'])
         )
 
-    def shortest_path(self, start_node: int, end_node: int) -> List[Tuple[float, float]]:
+    def shortest_path(self, start_node: int, end_node: int) -> List[int]:
         # A* pathfinding algorithm
         open_set = {start_node}
         closed_set = set()
@@ -77,9 +77,9 @@ class SimpleGraph:
             if current == end_node:
                 path = []
                 while current in came_from:
-                    path.append((self.nodes[current]['y'], self.nodes[current]['x']))
+                    path.append(current)
                     current = came_from[current]
-                path.append((self.nodes[start_node]['y'], self.nodes[start_node]['x']))
+                path.append(start_node)
                 return list(reversed(path))
             
             open_set.remove(current)
@@ -100,8 +100,7 @@ class SimpleGraph:
                 g_score[neighbor] = tentative_g_score
                 f_score[neighbor] = g_score[neighbor] + self._heuristic(neighbor, end_node)
         
-        return [(self.nodes[start_node]['y'], self.nodes[start_node]['x']),
-                (self.nodes[end_node]['y'], self.nodes[end_node]['x'])]
+        return [start_node, end_node]
 
     def nearest_node(self, lat: float, lon: float) -> int:
         min_dist = float('inf')
