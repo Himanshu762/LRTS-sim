@@ -1,5 +1,5 @@
-# Use Python 3.9 or your preferred version
-FROM python:3.9-slim
+# Use Python 3.11.9
+FROM python:3.11.9-slim
 
 # Set working directory
 WORKDIR /app
