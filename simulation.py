@@ -1,11 +1,10 @@
 import numpy as np
-import osmnx as ox
-import networkx as nx
 from dataclasses import dataclass
 from typing import List, Tuple, Dict
 import time
 from enum import Enum
 import random
+from routing import SimpleGraph
 
 class RideStatus(Enum):
     WAITING = "waiting"
@@ -47,18 +46,15 @@ class Auto:
 
 class SimulationManager:
     def __init__(self, metro_station: Tuple[float, float], radius_km: float = 4.0, num_autos: int = 5):
-        # Use 2.5km radius and 6 autos
         self.metro_station = metro_station
         self.radius_km = 2.5
         self.num_autos = 6
         
-        # Initialize graph
-        self.G = ox.graph_from_point(metro_station, dist=radius_km * 1000, network_type="drive")
-        self.G = ox.add_edge_speeds(self.G)
-        self.G = ox.add_edge_travel_times(self.G)
+        # Initialize graph using SimpleGraph instead of osmnx
+        self.G = SimpleGraph(metro_station, radius_km)
         
         # Find metro station node
-        self.metro_node = ox.distance.nearest_nodes(self.G, metro_station[1], metro_station[0])
+        self.metro_node = self.G.nearest_node(metro_station[0], metro_station[1])
         
         # Initialize state
         self.requests = {}
@@ -80,8 +76,7 @@ class SimulationManager:
             )
         return autos
 
-    def generate_random_request(self) -> Request:
-        # Generate random point within radius
+    def generate_random_request(self):
         angle = random.uniform(0, 2 * np.pi)
         r = random.uniform(0, self.radius_km)
         
@@ -90,17 +85,17 @@ class SimulationManager:
         dy = r * np.sin(angle)
         
         # Convert to lat/lon
-        lat = self.metro_station[0] + (dy / 111)  # Approximate conversion
+        lat = self.metro_station[0] + (dy / 111)
         lon = self.metro_station[1] + (dx / (111 * np.cos(np.radians(self.metro_station[0]))))
         
         # Debug print
         print(f"Generated request at: [{lat}, {lon}]")
         
-        pickup_node = ox.distance.nearest_nodes(self.G, lon, lat)
+        pickup_node = self.G.nearest_node(lat, lon)
         
         request = Request(
             id=self.request_counter,
-            pickup_loc=[lat, lon],  # Changed to list format for JSON serialization
+            pickup_loc=[lat, lon],
             pickup_node=pickup_node,
             created_time=self.simulation_time,
             status=RideStatus.WAITING
@@ -109,12 +104,11 @@ class SimulationManager:
         self.request_counter += 1
         return request
 
-    def find_nearest_available_auto(self, request: Request) -> Auto:
+    def find_nearest_available_auto(self, request: Request):
         min_distance = float('inf')
         nearest_auto = None
-        assigned_pickups = set()  # Track assigned pickup points
+        assigned_pickups = set()
 
-        # Collect all assigned pickup points
         for auto in self.autos.values():
             for passenger in auto.current_passengers:
                 assigned_pickups.add(passenger.pickup_node)
@@ -122,41 +116,34 @@ class SimulationManager:
                 assigned_pickups.add(queued.pickup_node)
 
         for auto in self.autos.values():
-            # Check if auto is available based on status and capacity
             if auto.status == AutoStatus.IDLE or (
                 self.enable_ride_sharing and 
-                len(auto.current_passengers) + len(auto.pickup_queue) < 2 and  # Max 2 pickups
-                request.pickup_node not in assigned_pickups and  # Avoid duplicate assignments
+                len(auto.current_passengers) + len(auto.pickup_queue) < 2 and
+                request.pickup_node not in assigned_pickups and
                 auto.status == AutoStatus.MOVING_TO_PICKUP
             ):
                 try:
-                    distance = nx.shortest_path_length(
-                        self.G, 
-                        auto.current_node, 
-                        request.pickup_node, 
-                        weight='travel_time'
-                    )
+                    path = self.G.shortest_path(auto.current_node, request.pickup_node)
+                    distance = len(path)  # Use path length as distance metric
                     if distance < min_distance:
                         min_distance = distance
                         nearest_auto = auto
-                except nx.NetworkXNoPath:
+                except Exception:
                     continue
 
         return nearest_auto
 
     def update_auto_location(self, auto: Auto):
         if not auto.route or auto.route_index >= len(auto.route):
-            # If there are more pickups in queue, set route to next pickup
             if auto.status == AutoStatus.MOVING_TO_PICKUP and len(auto.pickup_queue) > 0:
                 next_pickup = auto.pickup_queue.pop(0)
-                auto.route = nx.shortest_path(self.G, auto.current_node, next_pickup.pickup_node, weight='travel_time')
+                auto.route = self.G.shortest_path(auto.current_node, next_pickup.pickup_node)
                 auto.route_index = 0
                 return
             elif auto.status == AutoStatus.MOVING_TO_DROPOFF and len(auto.pickup_queue) > 0:
-                # After dropping off, if more pickups are queued, go to next pickup
                 auto.status = AutoStatus.MOVING_TO_PICKUP
                 next_pickup = auto.pickup_queue[0]
-                auto.route = nx.shortest_path(self.G, auto.current_node, next_pickup.pickup_node, weight='travel_time')
+                auto.route = self.G.shortest_path(auto.current_node, next_pickup.pickup_node)
                 auto.route_index = 0
                 return
             return
@@ -183,17 +170,17 @@ class SimulationManager:
                     if len(auto.pickup_queue) > 0:
                         # If more pickups queued, go to next pickup
                         next_pickup = auto.pickup_queue.pop(0)
-                        auto.route = nx.shortest_path(self.G, auto.current_node, next_pickup.pickup_node, weight='travel_time')
+                        auto.route = self.G.shortest_path(auto.current_node, next_pickup.pickup_node)
                         auto.route_index = 0
                     else:
                         # No more pickups, head to metro station
                         auto.status = AutoStatus.MOVING_TO_DROPOFF
-                        auto.route = nx.shortest_path(self.G, auto.current_node, self.metro_node, weight='travel_time')
+                        auto.route = self.G.shortest_path(auto.current_node, self.metro_node)
                         auto.route_index = 0
                 else:
                     # No assigned passengers found, return to metro station
                     auto.status = AutoStatus.MOVING_TO_DROPOFF
-                    auto.route = nx.shortest_path(self.G, auto.current_node, self.metro_node, weight='travel_time')
+                    auto.route = self.G.shortest_path(auto.current_node, self.metro_node)
                     auto.route_index = 0
                 
             elif auto.status == AutoStatus.MOVING_TO_DROPOFF:
@@ -223,18 +210,14 @@ class SimulationManager:
                     # First pickup for idle auto
                     auto.current_passengers.append(request)
                     auto.status = AutoStatus.MOVING_TO_PICKUP
-                    auto.route = nx.shortest_path(
-                        self.G, auto.current_node, request.pickup_node, weight='travel_time'
-                    )
+                    auto.route = self.G.shortest_path(auto.current_node, request.pickup_node)
                     auto.route_index = 0
                 elif self.enable_ride_sharing:
                     # Add to pickup queue for ride sharing
                     auto.pickup_queue.append(request)
                     # Calculate and store the route for visualization
                     if len(auto.pickup_queue) == 1:
-                        request.route = nx.shortest_path(
-                            self.G, auto.current_node, request.pickup_node, weight='travel_time'
-                        )
+                        request.route = self.G.shortest_path(auto.current_node, request.pickup_node)
 
         # Update auto locations
         for auto in self.autos.values():
