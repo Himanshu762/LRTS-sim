@@ -1,6 +1,8 @@
-from haversine import haversine
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 import numpy as np
+from haversine import haversine
+import requests
+import polyline
 
 class SimpleGraph:
     def __init__(self, center: Tuple[float, float], radius_km: float):
@@ -8,10 +10,11 @@ class SimpleGraph:
         self.radius_km = radius_km
         self.nodes = self._generate_grid()
         self.edges = self._create_edges()
+        self.cache = {}  # Cache for road paths
         
-    def _generate_grid(self, grid_size: int = 50):
-        # Create a grid of nodes within radius
-        lat_span = self.radius_km / 111  # Approximate degrees
+    def _generate_grid(self, grid_size: int = 20):
+        # Create a sparser grid for road network nodes
+        lat_span = self.radius_km / 111
         lon_span = self.radius_km / (111 * np.cos(np.radians(self.center[0])))
         
         lats = np.linspace(self.center[0] - lat_span, self.center[0] + lat_span, grid_size)
@@ -22,52 +25,47 @@ class SimpleGraph:
         for lat in lats:
             for lon in lons:
                 if haversine(self.center, (lat, lon)) <= self.radius_km:
-                    nodes[node_id] = {'y': lat, 'x': lon}
+                    # Get the nearest road point using OSRM
+                    road_point = self._snap_to_road(lat, lon)
+                    nodes[node_id] = {'y': road_point[0], 'x': road_point[1]}
                     node_id += 1
         return nodes
-    
-    def _create_edges(self):
-        edges = {}
-        for node1 in self.nodes:
-            edges[node1] = {}
-            for node2 in self.nodes:
-                if node1 != node2:
-                    dist = haversine(
-                        (self.nodes[node1]['y'], self.nodes[node1]['x']),
-                        (self.nodes[node2]['y'], self.nodes[node2]['x'])
-                    )
-                    if dist < self.radius_km / 10:  # Connect only nearby nodes
-                        edges[node1][node2] = dist
-        return edges
-    
-    def shortest_path(self, start_node: int, end_node: int) -> List[int]:
-        # Simple Dijkstra's algorithm
-        distances = {node: float('infinity') for node in self.nodes}
-        distances[start_node] = 0
-        previous = {node: None for node in self.nodes}
-        unvisited = set(self.nodes.keys())
-        
-        while unvisited:
-            current = min(unvisited, key=lambda x: distances[x])
-            if current == end_node:
-                break
-                
-            unvisited.remove(current)
-            
-            for neighbor, dist in self.edges[current].items():
-                if neighbor in unvisited:
-                    new_dist = distances[current] + dist
-                    if new_dist < distances[neighbor]:
-                        distances[neighbor] = new_dist
-                        previous[neighbor] = current
-        
-        # Reconstruct path
-        path = []
-        current = end_node
-        while current is not None:
-            path.append(current)
-            current = previous[current]
-        return list(reversed(path))
+
+    def _snap_to_road(self, lat: float, lon: float) -> Tuple[float, float]:
+        try:
+            url = f"http://router.project-osrm.org/nearest/v1/driving/{lon},{lat}?number=1"
+            response = requests.get(url, timeout=5)  # Add timeout
+            data = response.json()
+            if data["code"] == "Ok":
+                point = data["waypoints"][0]["location"]
+                return (point[1], point[0])
+        except Exception as e:
+            print(f"Error snapping to road: {e}")
+        return (lat, lon)  # Fallback to original point
+
+    def _get_road_path(self, start: Tuple[float, float], end: Tuple[float, float]) -> List[Tuple[float, float]]:
+        # Get actual road path using OSRM
+        cache_key = f"{start}_{end}"
+        if cache_key in self.cache:
+            return self.cache[cache_key]
+
+        url = f"http://router.project-osrm.org/route/v1/driving/{start[1]},{start[0]};{end[1]},{end[0]}?overview=full&geometries=polyline"
+        try:
+            response = requests.get(url)
+            data = response.json()
+            if data["code"] == "Ok":
+                geometry = data["routes"][0]["geometry"]
+                path = polyline.decode(geometry)
+                self.cache[cache_key] = path
+                return path
+        except:
+            pass
+        return [start, end]  # Fallback to direct path
+
+    def shortest_path(self, start_node: int, end_node: int) -> List[Tuple[float, float]]:
+        start_coords = (self.nodes[start_node]['y'], self.nodes[start_node]['x'])
+        end_coords = (self.nodes[end_node]['y'], self.nodes[end_node]['x'])
+        return self._get_road_path(start_coords, end_coords)
     
     def nearest_node(self, lat: float, lon: float) -> int:
         min_dist = float('infinity')

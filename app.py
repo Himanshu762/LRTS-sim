@@ -12,11 +12,15 @@ simulation = SimulationManager(metro_station=DELHI_METRO_STATION)
 
 def run_simulation():
     while True:
-        if simulation.is_running:
-            simulation.simulation_step()
-        time.sleep(1)
+        try:
+            if simulation.is_running:
+                simulation.simulation_step()
+            time.sleep(1)
+        except Exception as e:
+            print(f"Simulation error: {e}")
+            continue
 
-# Start simulation in background thread
+# Create a daemon thread that won't block the main application
 simulation_thread = threading.Thread(target=run_simulation, daemon=True)
 simulation_thread.start()
 

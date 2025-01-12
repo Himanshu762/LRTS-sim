@@ -193,37 +193,35 @@ class SimulationManager:
                 auto.pickup_queue = []
 
     def simulation_step(self):
-        # Generate new requests
-        if random.random() < 0.1:  # 10% chance of new request per step
-            request = self.generate_random_request()
-            self.requests[request.id] = request
+        try:
+            # Generate new requests
+            if random.random() < 0.1:  # 10% chance of new request per step
+                request = self.generate_random_request()
+                self.requests[request.id] = request
 
-        # Process waiting requests
-        waiting_requests = [r for r in self.requests.values() if r.status == RideStatus.WAITING]
-        for request in waiting_requests:
-            auto = self.find_nearest_available_auto(request)
-            if auto:
-                request.status = RideStatus.ASSIGNED
-                request.assigned_auto = auto.id
-                
-                if auto.status == AutoStatus.IDLE:
-                    # First pickup for idle auto
-                    auto.current_passengers.append(request)
-                    auto.status = AutoStatus.MOVING_TO_PICKUP
-                    auto.route = self.G.shortest_path(auto.current_node, request.pickup_node)
-                    auto.route_index = 0
-                elif self.enable_ride_sharing:
-                    # Add to pickup queue for ride sharing
-                    auto.pickup_queue.append(request)
-                    # Calculate and store the route for visualization
-                    if len(auto.pickup_queue) == 1:
-                        request.route = self.G.shortest_path(auto.current_node, request.pickup_node)
+            # Process waiting requests
+            waiting_requests = [r for r in self.requests.values() if r.status == RideStatus.WAITING]
+            for request in waiting_requests:
+                auto = self.find_nearest_available_auto(request)
+                if auto:
+                    request.status = RideStatus.ASSIGNED
+                    request.assigned_auto = auto.id
+                    
+                    if auto.status == AutoStatus.IDLE:
+                        auto.current_passengers.append(request)
+                        auto.status = AutoStatus.MOVING_TO_PICKUP
+                        auto.route = self.G.shortest_path(auto.current_node, request.pickup_node)
+                        auto.route_index = 0
+                    elif self.enable_ride_sharing:
+                        auto.pickup_queue.append(request)
 
-        # Update auto locations
-        for auto in self.autos.values():
-            self.update_auto_location(auto)
+            # Update auto locations
+            for auto in self.autos.values():
+                self.update_auto_location(auto)
 
-        self.simulation_time += self.update_interval
+            self.simulation_time += self.update_interval
+        except Exception as e:
+            print(f"Error in simulation step: {e}")
 
     # For capacity estimation, define a separate function that doesn't slow the simulation:
     def estimate_capacity(self, hours=3, max_passengers_per_auto=1):
