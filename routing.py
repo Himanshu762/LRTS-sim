@@ -7,66 +7,62 @@ class SimpleGraph:
     def __init__(self, center: Tuple[float, float], radius_km: float):
         self.center = center
         self.radius_km = radius_km
-        self.nodes = self._generate_grid()
-        self.edges = self._create_edges()
+        self.nodes = {}
+        self.edges = {}
+        self._generate_road_network()
         
-    def _generate_grid(self, grid_size: int = 30):
-        # Create a grid of nodes
-        lat_span = self.radius_km / 111
-        lon_span = self.radius_km / (111 * np.cos(np.radians(self.center[0])))
+    def _generate_road_network(self):
+        # Parameters for road network
+        main_road_spacing = self.radius_km / 4  # Major roads every 1km
+        minor_road_spacing = self.radius_km / 8  # Minor roads every 500m
         
-        # Generate main roads (fewer, more structured points)
-        nodes = {}
+        # Convert to lat/lon spans
+        lat_main = main_road_spacing / 111
+        lon_main = main_road_spacing / (111 * np.cos(np.radians(self.center[0])))
+        lat_minor = minor_road_spacing / 111
+        lon_minor = minor_road_spacing / (111 * np.cos(np.radians(self.center[0])))
+        
         node_id = 0
         
-        # Create main arterial roads (north-south and east-west)
-        road_count = 5
-        for i in range(road_count):
-            lat = self.center[0] - lat_span + (2 * lat_span * i / (road_count - 1))
-            for j in range(grid_size):
-                lon = self.center[1] - lon_span + (2 * lon_span * j / (grid_size - 1))
+        # Generate main roads (grid)
+        for i in range(-4, 5):  # Main north-south roads
+            lat = self.center[0] + (i * lat_main)
+            for j in np.arange(-4, 4.1, 0.5):  # More points along the road
+                lon = self.center[1] + (j * lon_main)
                 if haversine(self.center, (lat, lon)) <= self.radius_km:
-                    nodes[node_id] = {'y': lat, 'x': lon}
+                    self.nodes[node_id] = {'y': lat, 'x': lon, 'type': 'main'}
                     node_id += 1
         
-        # Create connecting roads
-        for i in range(grid_size):
-            lat = self.center[0] - lat_span + (2 * lat_span * i / (grid_size - 1))
-            for j in range(road_count):
-                lon = self.center[1] - lon_span + (2 * lon_span * j / (road_count - 1))
+        # Generate minor roads
+        for i in np.arange(-8, 8.1, 0.5):  # Minor east-west roads
+            lat = self.center[0] + (i * lat_minor)
+            for j in range(-8, 9):
+                lon = self.center[1] + (j * lon_minor)
                 if haversine(self.center, (lat, lon)) <= self.radius_km:
-                    nodes[node_id] = {'y': lat, 'x': lon}
+                    self.nodes[node_id] = {'y': lat, 'x': lon, 'type': 'minor'}
                     node_id += 1
         
-        return nodes
-
-    def _create_edges(self):
-        edges = {}
+        # Create edges (connections between nodes)
         for node1 in self.nodes:
-            edges[node1] = {}
+            self.edges[node1] = {}
             for node2 in self.nodes:
                 if node1 != node2:
                     dist = haversine(
                         (self.nodes[node1]['y'], self.nodes[node1]['x']),
                         (self.nodes[node2]['y'], self.nodes[node2]['x'])
                     )
-                    # Connect only to nearby nodes (creating a road network)
-                    if dist < self.radius_km / 10:
-                        edges[node1][node2] = dist
-        return edges
-
-    def _heuristic(self, node1: int, node2: int) -> float:
-        # A* heuristic using haversine distance
-        return haversine(
-            (self.nodes[node1]['y'], self.nodes[node1]['x']),
-            (self.nodes[node2]['y'], self.nodes[node2]['x'])
-        )
+                    # Connect nodes if they're close and form a grid-like pattern
+                    if dist < self.radius_km / 16:  # Shorter connections for grid-like pattern
+                        # Add weight based on road type
+                        weight = 1.0
+                        if self.nodes[node1]['type'] == 'minor' or self.nodes[node2]['type'] == 'minor':
+                            weight = 1.2  # Minor roads are slower
+                        self.edges[node1][node2] = dist * weight
 
     def shortest_path(self, start_node: int, end_node: int) -> List[int]:
-        # A* pathfinding algorithm
+        # A* pathfinding with road type preferences
         open_set = {start_node}
         closed_set = set()
-        
         came_from = {}
         g_score = {start_node: 0}
         f_score = {start_node: self._heuristic(start_node, end_node)}
@@ -101,6 +97,12 @@ class SimpleGraph:
                 f_score[neighbor] = g_score[neighbor] + self._heuristic(neighbor, end_node)
         
         return [start_node, end_node]
+
+    def _heuristic(self, node1: int, node2: int) -> float:
+        return haversine(
+            (self.nodes[node1]['y'], self.nodes[node1]['x']),
+            (self.nodes[node2]['y'], self.nodes[node2]['x'])
+        )
 
     def nearest_node(self, lat: float, lon: float) -> int:
         min_dist = float('inf')
