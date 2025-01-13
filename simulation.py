@@ -109,7 +109,29 @@ class SimulationManager:
     def find_nearest_available_auto(self, request: Request) -> Auto:
         min_distance = float('inf')
         nearest_auto = None
-        assigned_pickups = set()  # Track assigned pickup points
+        assigned_pickups = set()
+
+        # First, check if this request is the nearest to metro station among waiting requests
+        waiting_requests = [r for r in self.requests.values() if r.status == RideStatus.WAITING]
+        
+        # Sort waiting requests by distance to metro station
+        metro_distances = {}
+        for r in waiting_requests:
+            try:
+                dist = nx.shortest_path_length(
+                    self.G,
+                    r.pickup_node,
+                    self.metro_node,
+                    weight='travel_time'
+                )
+                metro_distances[r.id] = dist
+            except nx.NetworkXNoPath:
+                metro_distances[r.id] = float('inf')
+        
+        # Only process this request if it's among the closest to metro station
+        closest_requests = sorted(metro_distances.items(), key=lambda x: x[1])[:3]  # Consider top 3 closest
+        if request.id not in [r[0] for r in closest_requests]:
+            return None
 
         # Collect all assigned pickup points
         for auto in self.autos.values():
@@ -118,12 +140,12 @@ class SimulationManager:
             for queued in auto.pickup_queue:
                 assigned_pickups.add(queued.pickup_node)
 
+        # Find nearest available auto
         for auto in self.autos.values():
-            # Check if auto is available based on status and capacity
             if auto.status == AutoStatus.IDLE or (
                 self.enable_ride_sharing and 
-                len(auto.current_passengers) + len(auto.pickup_queue) < 2 and  # Max 2 pickups
-                request.pickup_node not in assigned_pickups and  # Avoid duplicate assignments
+                len(auto.current_passengers) + len(auto.pickup_queue) < 2 and
+                request.pickup_node not in assigned_pickups and
                 auto.status == AutoStatus.MOVING_TO_PICKUP
             ):
                 try:
