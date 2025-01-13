@@ -107,31 +107,20 @@ class SimulationManager:
         self.request_counter += 1
         return request
     def find_nearest_available_auto(self, request: Request) -> Auto:
-        min_distance = float('inf')
+        min_score = float('inf')
         nearest_auto = None
         assigned_pickups = set()
 
-        # First, check if this request is the nearest to metro station among waiting requests
-        waiting_requests = [r for r in self.requests.values() if r.status == RideStatus.WAITING]
-        
-        # Sort waiting requests by distance to metro station
-        metro_distances = {}
-        for r in waiting_requests:
-            try:
-                dist = nx.shortest_path_length(
-                    self.G,
-                    r.pickup_node,
-                    self.metro_node,
-                    weight='travel_time'
-                )
-                metro_distances[r.id] = dist
-            except nx.NetworkXNoPath:
-                metro_distances[r.id] = float('inf')
-        
-        # Only process this request if it's among the closest to metro station
-        closest_requests = sorted(metro_distances.items(), key=lambda x: x[1])[:3]  # Consider top 3 closest
-        if request.id not in [r[0] for r in closest_requests]:
-            return None
+        # Calculate request's distance to metro
+        try:
+            request_metro_dist = nx.shortest_path_length(
+                self.G,
+                request.pickup_node,
+                self.metro_node,
+                weight='travel_time'
+            )
+        except nx.NetworkXNoPath:
+            request_metro_dist = float('inf')
 
         # Collect all assigned pickup points
         for auto in self.autos.values():
@@ -140,7 +129,7 @@ class SimulationManager:
             for queued in auto.pickup_queue:
                 assigned_pickups.add(queued.pickup_node)
 
-        # Find nearest available auto
+        # Find best available auto based on combined score
         for auto in self.autos.values():
             if auto.status == AutoStatus.IDLE or (
                 self.enable_ride_sharing and 
@@ -149,15 +138,41 @@ class SimulationManager:
                 auto.status == AutoStatus.MOVING_TO_PICKUP
             ):
                 try:
-                    distance = nx.shortest_path_length(
-                        self.G, 
-                        auto.current_node, 
-                        request.pickup_node, 
+                    # Calculate auto's current distance to metro
+                    auto_metro_dist = nx.shortest_path_length(
+                        self.G,
+                        auto.current_node,
+                        self.metro_node,
                         weight='travel_time'
                     )
-                    if distance < min_distance:
-                        min_distance = distance
+                    
+                    # Calculate distance from auto to request
+                    auto_request_dist = nx.shortest_path_length(
+                        self.G,
+                        auto.current_node,
+                        request.pickup_node,
+                        weight='travel_time'
+                    )
+
+                    # Calculate efficiency score (lower is better)
+                    # Consider:
+                    # 1. Distance from auto to request
+                    # 2. Distance from request to metro
+                    # 3. Auto's current distance to metro
+                    # 4. Current passenger count
+                    passenger_factor = 1.0 if len(auto.current_passengers) == 0 else 0.7
+                    
+                    score = (
+                        (0.3 * auto_request_dist) +  # Weight for pickup distance
+                        (0.3 * request_metro_dist) +  # Weight for request-to-metro distance
+                        (0.3 * auto_metro_dist) +    # Weight for auto's distance to metro
+                        (0.1 * passenger_factor)      # Small weight for passenger optimization
+                    )
+
+                    if score < min_score:
+                        min_score = score
                         nearest_auto = auto
+
                 except nx.NetworkXNoPath:
                     continue
 
@@ -274,15 +289,16 @@ class SimulationManager:
         # Calculate trips per hour per auto
         trips_per_hour = 60 / total_trip_time
         
-        if max_passengers_per_auto == 1:
-            # Single passenger mode
-            total_capacity = int(num_autos * trips_per_hour * hours)
-        else:
-            # Ride sharing mode (2 passengers)
-            # Add efficiency factor (0.8) due to routing overhead
-            total_capacity = int(num_autos * trips_per_hour * hours * 1.8)
+        # Calculate total capacity
+        total_trips = trips_per_hour * num_autos * hours
+        total_passengers = total_trips * max_passengers_per_auto
         
-        return total_capacity
+        return {
+            'total_trips': round(total_trips),
+            'total_passengers': round(total_passengers),
+            'trips_per_hour': round(trips_per_hour, 1),
+            'avg_trip_time_mins': round(total_trip_time, 1)
+        }
     def get_simulation_state(self):
         return {
             'time': self.simulation_time,
