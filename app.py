@@ -6,6 +6,7 @@ from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 from simulation import SimulationManager
 import threading
 import time
+import os
 
 app = Flask(__name__)
 
@@ -142,4 +143,5 @@ def toggle_simulation():
     return jsonify({'is_running': simulation.is_running})
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
