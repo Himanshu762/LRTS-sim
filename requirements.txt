@@ -4,4 +4,5 @@ folium==0.15.1
 osmnx==1.9.1
 networkx==3.2.1
 ortools==9.8.3296
-numpy==1.26.4 
+numpy==1.26.4
+scikit-learn==1.4.0 
