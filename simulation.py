@@ -272,9 +272,9 @@ class SimulationManager:
 
         self.simulation_time += self.update_interval
     # For capacity estimation, define a separate function that doesn't slow the simulation:
-    def estimate_capacity(self, hours=3, max_passengers_per_auto=1):
+    def estimate_capacity(self, hours=3):
         # Constants for calculation
-        num_autos = 30  # Total autos in 3-hour period
+        num_autos = 5  # Fixed number of autos
         avg_speed_kmh = 20  # Average speed in km/h
         avg_pickup_time = 2  # Minutes per pickup
         avg_dropoff_time = 2  # Minutes per dropoff
@@ -289,16 +289,28 @@ class SimulationManager:
         # Calculate trips per hour per auto
         trips_per_hour = 60 / total_trip_time
         
-        # Calculate total capacity
-        total_trips = trips_per_hour * num_autos * hours
-        total_passengers = total_trips * max_passengers_per_auto
+        # Calculate capacity for both normal and ride-sharing modes
+        hourly_data = []
+        for hour in range(1, hours + 1):
+            normal_trips = trips_per_hour * num_autos * hour
+            normal_passengers = normal_trips * 1  # 1 passenger per trip
+            
+            sharing_trips = trips_per_hour * num_autos * hour
+            sharing_passengers = sharing_trips * 3  # 3 passengers per trip with ride sharing
+            
+            hourly_data.append({
+                'hour': hour,
+                'normal_mode': {
+                    'trips': round(normal_trips),
+                    'passengers': round(normal_passengers)
+                },
+                'sharing_mode': {
+                    'trips': round(sharing_trips),
+                    'passengers': round(sharing_passengers)
+                }
+            })
         
-        return {
-            'total_trips': round(total_trips),
-            'total_passengers': round(total_passengers),
-            'trips_per_hour': round(trips_per_hour, 1),
-            'avg_trip_time_mins': round(total_trip_time, 1)
-        }
+        return hourly_data
     def get_simulation_state(self):
         return {
             'time': self.simulation_time,

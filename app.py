@@ -142,6 +142,11 @@ def toggle_simulation():
     simulation.is_running = not simulation.is_running
     return jsonify({'is_running': simulation.is_running})
 
+@app.route('/capacity_estimate')
+def get_capacity_estimate():
+    hourly_data = simulation.estimate_capacity()
+    return jsonify(hourly_data)
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
