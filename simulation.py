@@ -46,15 +46,34 @@ class Auto:
             self.pickup_queue = []
 class SimulationManager:
     def __init__(self, metro_station: Tuple[float, float], radius_km: float = 4.0, num_autos: int = 5):
-        # Use 2.5km radius and 6 autos
         self.metro_station = metro_station
         self.radius_km = 2.5
-        self.num_autos = 6
+        self.num_autos = 5
         
         # Initialize graph
-        self.G = ox.graph_from_point(metro_station, dist=radius_km * 1000, network_type="drive")
-        self.G = ox.add_edge_speeds(self.G)
-        self.G = ox.add_edge_travel_times(self.G)
+        self.G = ox.graph_from_point(
+            metro_station, 
+            dist=radius_km * 1000, 
+            network_type="drive",
+            simplify=False,
+            retain_all=True,
+            truncate_by_edge=True
+        )
+        
+        # Calculate speeds and travel times
+        for _, _, data in self.G.edges(data=True):
+            data['speed_kph'] = data.get('maxspeed', 30)
+            if isinstance(data['speed_kph'], list):
+                data['speed_kph'] = float(data['speed_kph'][0])
+            if isinstance(data['speed_kph'], str):
+                data['speed_kph'] = float(data['speed_kph'].split()[0])
+            data['travel_time'] = data['length'] / (data['speed_kph'] * 1000 / 3600)
+        
+        # Strip node attributes
+        for _, data in self.G.nodes(data=True):
+            keep = {'x': data['x'], 'y': data['y']}
+            data.clear()
+            data.update(keep)
         
         # Find metro station node
         self.metro_node = ox.distance.nearest_nodes(self.G, metro_station[1], metro_station[0])
@@ -109,9 +128,8 @@ class SimulationManager:
     def find_nearest_available_auto(self, request: Request) -> Auto:
         min_score = float('inf')
         nearest_auto = None
-        assigned_pickups = set()
-
-        # Calculate request's distance to metro
+        
+        # Pre-calculate request's distance to metro
         try:
             request_metro_dist = nx.shortest_path_length(
                 self.G,
@@ -121,13 +139,13 @@ class SimulationManager:
             )
         except nx.NetworkXNoPath:
             request_metro_dist = float('inf')
-
-        # Collect all assigned pickup points
-        for auto in self.autos.values():
-            for passenger in auto.current_passengers:
-                assigned_pickups.add(passenger.pickup_node)
-            for queued in auto.pickup_queue:
-                assigned_pickups.add(queued.pickup_node)
+        
+        # Use set for faster lookups
+        assigned_pickups = {
+            p.pickup_node 
+            for auto in self.autos.values() 
+            for p in (auto.current_passengers + auto.pickup_queue)
+        }
 
         # Find best available auto based on combined score
         for auto in self.autos.values():
@@ -237,6 +255,15 @@ class SimulationManager:
                 auto.route = None
                 auto.pickup_queue = []
     def simulation_step(self):
+        # Clean up old completed requests
+        if self.simulation_time % 60 == 0:  # Changed back to 60
+            current_time = self.simulation_time
+            self.requests = {
+                k: v for k, v in self.requests.items() 
+                if v.status != RideStatus.COMPLETED or 
+                current_time - v.created_time < 300  # Changed back to 300 seconds
+            }
+        
         # Generate new requests
         if random.random() < 0.1:  # 10% chance of new request per step
             request = self.generate_random_request()
@@ -312,9 +339,31 @@ class SimulationManager:
         
         return hourly_data
     def get_simulation_state(self):
+        # Only return essential data
         return {
             'time': self.simulation_time,
-            'autos': self.autos,
-            'requests': self.requests,
+            'autos': {
+                k: Auto(
+                    id=v.id,
+                    current_loc=v.current_loc,
+                    current_node=v.current_node,
+                    status=v.status,
+                    current_passengers=v.current_passengers[:],  # Shallow copy
+                    route=v.route[:] if v.route else None,  # Shallow copy
+                    pickup_queue=v.pickup_queue[:] if v.pickup_queue else None  # Shallow copy
+                )
+                for k, v in self.autos.items()
+            },
+            'requests': {
+                k: Request(
+                    id=v.id,
+                    pickup_loc=v.pickup_loc,
+                    pickup_node=v.pickup_node,
+                    created_time=v.created_time,
+                    status=v.status,
+                    assigned_auto=v.assigned_auto
+                )
+                for k, v in self.requests.items()
+            },
             'ride_sharing': self.enable_ride_sharing
         }

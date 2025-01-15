@@ -7,6 +7,7 @@ from simulation import SimulationManager
 import threading
 import time
 import os
+import gc
 
 app = Flask(__name__)
 
@@ -94,43 +95,30 @@ def optimize_route():
 def get_simulation_state():
     state = simulation.get_simulation_state()
     
-    # Count picked up and completed requests
-    picked_up_count = len([r for r in state['requests'].values() 
-                          if r.status.value == 'in_vehicle'])
-    completed_count = len([r for r in state['requests'].values() 
-                          if r.status.value == 'completed'])
-    
-    return jsonify({
+    response = {
         'time': state['time'],
-        'autos': [
-            {
-                'id': auto.id,
-                'location': auto.current_loc,
-                'status': auto.status.value,
-                'passenger_ids': [p.id for p in auto.current_passengers],
-                'route': [(simulation.G.nodes[node]['y'], simulation.G.nodes[node]['x']) 
-                         for node in (auto.route or [])] if auto.route else [],
-                'pickup_queue': [
-                    {
-                        'id': req.id,
-                        'route': [(simulation.G.nodes[node]['y'], simulation.G.nodes[node]['x']) 
-                                for node in nx.shortest_path(simulation.G, auto.current_node, req.pickup_node, weight='travel_time')]
-                    } for req in auto.pickup_queue
-                ] if auto.pickup_queue else []
-            } for auto in state['autos'].values()
-        ],
-        'requests': [
-            {
-                'id': req.id,
-                'pickup': req.pickup_loc,
-                'status': req.status.value,
-                'assigned_auto': req.assigned_auto
-            } for req in state['requests'].values()
-        ],
+        'autos': [{
+            'id': auto.id,
+            'location': auto.current_loc,
+            'status': auto.status.value,
+            'passenger_ids': [p.id for p in auto.current_passengers],
+            'route': [(simulation.G.nodes[node]['y'], simulation.G.nodes[node]['x']) 
+                     for node in (auto.route or [])]  # Removed route point limit
+        } for auto in state['autos'].values()],
+        'requests': [{
+            'id': req.id,
+            'pickup': req.pickup_loc,
+            'status': req.status.value,
+            'assigned_auto': req.assigned_auto
+        } for req in state['requests'].values()],
         'ride_sharing': state['ride_sharing'],
-        'picked_up_count': picked_up_count,
-        'completed_count': completed_count
-    })
+        'picked_up_count': len([r for r in state['requests'].values() 
+                              if r.status.value == 'in_vehicle']),
+        'completed_count': len([r for r in state['requests'].values() 
+                              if r.status.value == 'completed'])
+    }
+    
+    return jsonify(response)
 @app.route('/set_ride_sharing', methods=['POST'])
 def set_ride_sharing():
     data = request.json

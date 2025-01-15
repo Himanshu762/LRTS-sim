@@ -24,8 +24,9 @@
             z-index: 1000;
             width: 320px;
             max-width: 90vw;
-            max-height: calc(100vh - 2rem);
+            max-height: 95vh;
             overflow-y: auto;
+            padding-right: 5px;
         }
         .status-panel {
             background: rgba(255, 255, 255, 0.95);
@@ -142,8 +143,9 @@
 }
 
 .status-panel canvas {
-    max-height: 200px;
+    min-height: 200px;
     width: 100% !important;
+    margin: 10px 0;
 }
 </style>
 
@@ -191,6 +193,15 @@
             </div>
         </div>
 
+        <div class="status-panel">
+            <div class="status-header text-center">
+                Capacity Estimation
+            </div>
+            <div class="status-content">
+                <canvas id="capacityChart"></canvas>
+            </div>
+        </div>
+
         <div class="legend">
             <div class="legend-header text-center">
                 Legend
@@ -212,15 +223,6 @@
                     <span class="legend-color" style="background: #000000"></span>
                     <span>Pending Request</span>
                 </div>
-            </div>
-        </div>
-
-        <div class="status-panel mt-3">
-            <div class="status-header text-center">
-                Capacity Estimation (3 Hours)
-            </div>
-            <div class="status-content">
-                <canvas id="capacityChart"></canvas>
             </div>
         </div>
     </div>
@@ -425,75 +427,69 @@
         updateSimulation();
 
         // Initialize capacity chart
-        let capacityChart = null;
-
-        function initializeCapacityChart() {
-            fetch('/capacity_estimate')
-                .then(response => response.json())
-                .then(data => {
-                    const ctx = document.getElementById('capacityChart').getContext('2d');
-                    
-                    if (window.capacityChart) {
-                        window.capacityChart.destroy();
-                    }
-                    
-                    window.capacityChart = new Chart(ctx, {
-                        type: 'line',
-                        data: {
-                            labels: data.map(d => `Hour ${d.hour}`),
-                            datasets: [
-                                {
-                                    label: 'Normal Mode (1 passenger)',
-                                    data: data.map(d => d.normal_mode.passengers),
-                                    borderColor: 'rgb(75, 192, 192)',
-                                    tension: 0.1,
-                                    fill: false
+        document.addEventListener('DOMContentLoaded', function() {
+            function initializeCapacityChart() {
+                fetch('/capacity_estimate')
+                    .then(response => response.json())
+                    .then(data => {
+                        const ctx = document.getElementById('capacityChart');
+                        if (!ctx) {
+                            console.error('Canvas element not found');
+                            return;
+                        }
+                        
+                        if (window.capacityChart) {
+                            window.capacityChart.destroy();
+                        }
+                        
+                        window.capacityChart = new Chart(ctx, {
+                            type: 'line',
+                            data: {
+                                labels: data.map(d => `Hour ${d.hour}`),
+                                datasets: [
+                                    {
+                                        label: 'Normal Mode (1 passenger)',
+                                        data: data.map(d => d.normal_mode.passengers),
+                                        borderColor: 'rgb(75, 192, 192)',
+                                        tension: 0.1,
+                                        fill: false
+                                    },
+                                    {
+                                        label: 'Ride Sharing (3 passengers)',
+                                        data: data.map(d => d.sharing_mode.passengers),
+                                        borderColor: 'rgb(255, 99, 132)',
+                                        tension: 0.1,
+                                        fill: false
+                                    }
+                                ]
+                            },
+                            options: {
+                                responsive: true,
+                                maintainAspectRatio: false,
+                                scales: {
+                                    y: {
+                                        beginAtZero: true,
+                                        title: {
+                                            display: true,
+                                            text: 'Total Passengers'
+                                        }
+                                    }
                                 },
-                                {
-                                    label: 'Ride Sharing (3 passengers)',
-                                    data: data.map(d => d.sharing_mode.passengers),
-                                    borderColor: 'rgb(255, 99, 132)',
-                                    tension: 0.1,
-                                    fill: false
-                                }
-                            ]
-                        },
-                        options: {
-                            responsive: true,
-                            scales: {
-                                y: {
-                                    beginAtZero: true,
+                                plugins: {
                                     title: {
                                         display: true,
-                                        text: 'Total Passengers'
-                                    }
-                                }
-                            },
-                            plugins: {
-                                title: {
-                                    display: true,
-                                    text: '5 Autos Capacity Estimation'
-                                },
-                                tooltip: {
-                                    callbacks: {
-                                        label: function(context) {
-                                            const dataPoint = data[context.dataIndex];
-                                            const mode = context.datasetIndex === 0 ? 'normal_mode' : 'sharing_mode';
-                                            return [
-                                                `${context.dataset.label}: ${context.parsed.y} passengers`,
-                                                `Trips: ${dataPoint[mode].trips}`
-                                            ];
-                                        }
+                                        text: '5 Autos Capacity Estimation'
                                     }
                                 }
                             }
-                        }
-                    });
-                });
-        }
+                        });
+                    })
+                    .catch(error => console.error('Error loading capacity data:', error));
+            }
 
-        // Initialize the chart when page loads
-        initializeCapacityChart();
+            // Initialize the chart
+            initializeCapacityChart();
+        });
     </script>
 </body>
 </html>
