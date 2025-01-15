@@ -423,11 +423,13 @@
             });
         });
 
-        setInterval(updateSimulation, 1000);
+        setInterval(updateSimulation, 200);
         updateSimulation();
 
         // Initialize capacity chart
         document.addEventListener('DOMContentLoaded', function() {
+            let capacityChart = null;  // Define chart variable in scope
+            
             function initializeCapacityChart() {
                 fetch('/capacity_estimate')
                     .then(response => response.json())
@@ -438,11 +440,12 @@
                             return;
                         }
                         
-                        if (window.capacityChart) {
-                            window.capacityChart.destroy();
+                        // Destroy existing chart if it exists
+                        if (capacityChart) {
+                            capacityChart.destroy();
                         }
                         
-                        window.capacityChart = new Chart(ctx, {
+                        capacityChart = new Chart(ctx, {
                             type: 'line',
                             data: {
                                 labels: data.map(d => `Hour ${d.hour}`),

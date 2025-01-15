@@ -255,27 +255,30 @@ class SimulationManager:
                 auto.route = None
                 auto.pickup_queue = []
     def simulation_step(self):
-        # Clean up old completed requests
-        if self.simulation_time % 60 == 0:  # Changed back to 60
-            current_time = self.simulation_time
-            self.requests = {
-                k: v for k, v in self.requests.items() 
-                if v.status != RideStatus.COMPLETED or 
-                current_time - v.created_time < 300  # Changed back to 300 seconds
-            }
-        
-        # Generate new requests
-        if random.random() < 0.1:  # 10% chance of new request per step
-            request = self.generate_random_request()
-            self.requests[request.id] = request
+        # Batch process requests
+        if self.simulation_time % 5 == 0:  # Process every 5 steps
+            # Clean up old completed requests
+            if self.simulation_time % 60 == 0:
+                current_time = self.simulation_time
+                self.requests = {
+                    k: v for k, v in self.requests.items() 
+                    if v.status != RideStatus.COMPLETED or 
+                    current_time - v.created_time < 300
+                }
+            
+            # Generate new requests (batch generation)
+            for _ in range(5):  # Generate 5 requests at once if probability matches
+                if random.random() < 0.1:
+                    request = self.generate_random_request()
+                    self.requests[request.id] = request
 
-        # Process waiting requests
-        waiting_requests = [r for r in self.requests.values() if r.status == RideStatus.WAITING]
-        for request in waiting_requests:
-            auto = self.find_nearest_available_auto(request)
-            if auto:
-                request.status = RideStatus.ASSIGNED
-                request.assigned_auto = auto.id
+            # Process waiting requests in batch
+            waiting_requests = [r for r in self.requests.values() if r.status == RideStatus.WAITING]
+            for request in waiting_requests[:5]:  # Process max 5 requests per step
+                auto = self.find_nearest_available_auto(request)
+                if auto:
+                    request.status = RideStatus.ASSIGNED
+                    request.assigned_auto = auto.id
                 
                 if auto.status == AutoStatus.IDLE:
                     # First pickup for idle auto

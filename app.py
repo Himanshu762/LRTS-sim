@@ -10,23 +10,32 @@ import os
 import gc
 
 app = Flask(__name__)
+simulation = None
+initialization_complete = False
 
-# Initialize simulation
-DELHI_METRO_STATION = (28.6438, 77.1129)  # Changed to Tagore Garden Metro Station
-simulation = SimulationManager(metro_station=DELHI_METRO_STATION)
+def initialize_simulation():
+    global simulation, initialization_complete
+    from simulation import SimulationManager
+    DELHI_METRO_STATION = (28.6438, 77.1129)
+    simulation = SimulationManager(metro_station=DELHI_METRO_STATION)
+    initialization_complete = True
+
+# Start initialization in background
+init_thread = threading.Thread(target=initialize_simulation)
+init_thread.start()
 
 def run_simulation():
+    batch_size = 5  # Process 5 steps at once
     while True:
         if simulation.is_running:
-            simulation.simulation_step()
-        time.sleep(1)
-
-# Start simulation in background thread
-simulation_thread = threading.Thread(target=run_simulation, daemon=True)
-simulation_thread.start()
+            for _ in range(batch_size):
+                simulation.simulation_step()
+        time.sleep(0.2)  # Update every 200ms instead of every second
 
 @app.route('/')
 def index():
+    if not initialization_complete:
+        return "Application is initializing... Please refresh in a few seconds.", 503
     # Render the main map page
     initial_location = [28.6438, 77.1129]  # Default location (Delhi)
     map = folium.Map(location=initial_location, zoom_start=12)
@@ -93,6 +102,8 @@ def optimize_route():
     return jsonify({'route': full_path_coords})
 @app.route('/simulation_state')
 def get_simulation_state():
+    if not initialization_complete:
+        return jsonify({'error': 'Initializing'}), 503
     state = simulation.get_simulation_state()
     
     response = {
@@ -134,6 +145,13 @@ def toggle_simulation():
 def get_capacity_estimate():
     hourly_data = simulation.estimate_capacity()
     return jsonify(hourly_data)
+
+@app.route('/health')
+def health_check():
+    return jsonify({
+        'status': 'ready' if initialization_complete else 'initializing',
+        'simulation_running': simulation.is_running if initialization_complete else False
+    })
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
