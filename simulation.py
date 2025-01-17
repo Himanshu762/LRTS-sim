@@ -83,7 +83,7 @@ class SimulationManager:
 
     def generate_boundary_nodes(self):
         # Increase number of vertices for better precision
-        angles = np.linspace(0, 2*np.pi, 675, endpoint=False)  # 32 points instead of 8
+        angles = np.linspace(0, 2*np.pi, 8192, endpoint=False)  # 32 points instead of 8
         boundary_nodes = []
         
         # Get all nodes within max path length
