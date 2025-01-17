@@ -3,15 +3,18 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Auto-Rickshaw Simulation</title>
+    <title>Last Mile Connectivity Simulation</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css"/>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css">
     <style>
         body {
-            background-color: #f8f9fa;
+            margin: 0;
+            padding: 0;
         }
         #map {
-            height: 100vh;
+            position: absolute;
+            top: 0;
+            bottom: 0;
             width: 100%;
             position: fixed;
             top: 0;
@@ -24,9 +27,6 @@
             z-index: 1000;
             width: 320px;
             max-width: 90vw;
-            max-height: 95vh;
-            overflow-y: auto;
-            padding-right: 5px;
         }
         .status-panel {
             background: rgba(255, 255, 255, 0.95);
@@ -96,26 +96,6 @@
             border: 2px solid rgba(255, 255, 255, 0.8);
             box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
         }
-        .navbar-brand {
-    color: #4a5568 !important;
-    font-weight: 600;
-    letter-spacing: 0.5px;
-}
-
-.navbar-brand:hover {
-    color: #2d3748 !important;
-}
-
-.glass-navbar {
-    background: rgba(255, 255, 255, 0.95);
-    backdrop-filter: blur(10px);
-    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    z-index: 1000;
-}
 
 .form-check-input {
     width: 3em;
@@ -142,20 +122,65 @@
     box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
 }
 
-.status-panel canvas {
-    min-height: 200px;
-    width: 100% !important;
-    margin: 10px 0;
+.left-overlay-container {
+    position: fixed;
+    top: 1rem;
+    left: 1rem;
+    z-index: 1000;
+    width: 320px;
+    max-width: 90vw;
+}
+
+.capacity-panel {
+    background: rgba(255, 255, 255, 0.95);
+    border-radius: 12px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+    backdrop-filter: blur(10px);
+    margin-top: 1rem;
+}
+
+.capacity-header {
+    background: #4a5568;
+    color: white;
+    padding: 0.75rem;
+    border-radius: 12px 12px 0 0;
+    font-weight: 600;
+}
+
+.capacity-content {
+    padding: 1rem;
+}
+
+.right-overlay-container {
+    position: fixed;
+    top: 1rem;
+    right: 1rem;
+    z-index: 1000;
+    width: 320px;
+    max-width: 90vw;
+}
+
+.capacity-panel {
+    background: rgba(255, 255, 255, 0.95);
+    border-radius: 12px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+    backdrop-filter: blur(10px);
+}
+
+.trip-stats {
+    border-top: 1px solid #eee;
+    padding-top: 1rem;
+    margin-top: 1rem;
 }
 </style>
 
-<!-- Add this HTML right after <body> tag -->
-
 </head>
 <body>
+    <div class="container-fluid">
+        <span class="navbar-brand mb-0 h1">LRTS Sim</span>
+    </div>
     <div id="map"></div>
-
-    <div class="overlay-container">
+    <div class="left-overlay-container">
         <div class="status-panel">
             <div class="status-header text-center">
                 Simulation Status
@@ -192,16 +217,7 @@
                 </div>
             </div>
         </div>
-
-        <div class="status-panel">
-            <div class="status-header text-center">
-                Capacity Estimation
-            </div>
-            <div class="status-content">
-                <canvas id="capacityChart"></canvas>
-            </div>
-        </div>
-
+        
         <div class="legend">
             <div class="legend-header text-center">
                 Legend
@@ -227,6 +243,23 @@
         </div>
     </div>
 
+    <div class="right-overlay-container">
+        <div class="capacity-panel">
+            <div class="capacity-header text-center">
+                Capacity Analysis
+            </div>
+            <div class="capacity-content">
+                <canvas id="capacityChart"></canvas>
+                <div class="trip-stats mt-3">
+                    <div class="status-item">
+                        <span class="status-label">Average Trip Time</span>
+                        <span class="status-value" id="avg-trip-time">Loading...</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div class="control-button">
         <button id="simulationControl" class="btn btn-primary">
             Start Simulation
@@ -241,6 +274,7 @@
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
     <script>
         // Initialize map centered on Tagore Garden
         const map = L.map('map').setView([28.6438, 77.1129], 14);
@@ -252,14 +286,19 @@
             html: '<div style="background: #800080; border-radius: 50%; width: 12px; height: 12px;"></div>'
         });
         L.marker([28.6438, 77.1129], {icon: metroIcon}).addTo(map);
-
-        // After map is initialized:
-        const zoneCircle = L.circle(stationMarkerCoords, {
-            radius: 2500,   // 2.5km
-            color: 'gold',
-            fillColor: 'purple',
-            fillOpacity: 0.2
-        }).addTo(map);
+        // Create polygon boundary
+        let boundaryCoords = [];
+        fetch('/get_boundary')
+            .then(response => response.json())
+            .then(data => {
+                boundaryCoords = data.boundary.map(coord => [coord[0], coord[1]]);
+                const zonePolygon = L.polygon(boundaryCoords, {
+                    color: 'gold',
+                    fillColor: 'purple',
+                    fillOpacity: 0.2,
+                    weight: 2
+                }).addTo(map);
+            });
 
         // Store markers and routes
         const autoMarkers = {};
@@ -423,76 +462,52 @@
             });
         });
 
-        setInterval(updateSimulation, 200);
+        setInterval(updateSimulation, 1000);
         updateSimulation();
 
         // Initialize capacity chart
-        document.addEventListener('DOMContentLoaded', function() {
-            let capacityChart = null;  // Define chart variable in scope
-            
-            function initializeCapacityChart() {
-                fetch('/capacity_estimate')
-                    .then(response => response.json())
-                    .then(data => {
-                        const ctx = document.getElementById('capacityChart');
-                        if (!ctx) {
-                            console.error('Canvas element not found');
-                            return;
+        const ctx = document.getElementById('capacityChart').getContext('2d');
+        const capacityChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: ['7AM', '8AM', '9AM', '5PM', '6PM', '7PM', '8PM', '9PM'],
+                datasets: [{
+                    label: 'Estimated Capacity',
+                    data: [],
+                    borderColor: 'rgb(75, 192, 192)',
+                    tension: 0.1
+                }]
+            },
+            options: {
+                responsive: true,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        title: {
+                            display: true,
+                            text: 'Requests per Hour'
                         }
-                        
-                        // Destroy existing chart if it exists
-                        if (capacityChart) {
-                            capacityChart.destroy();
-                        }
-                        
-                        capacityChart = new Chart(ctx, {
-                            type: 'line',
-                            data: {
-                                labels: data.map(d => `Hour ${d.hour}`),
-                                datasets: [
-                                    {
-                                        label: 'Normal Mode (1 passenger)',
-                                        data: data.map(d => d.normal_mode.passengers),
-                                        borderColor: 'rgb(75, 192, 192)',
-                                        tension: 0.1,
-                                        fill: false
-                                    },
-                                    {
-                                        label: 'Ride Sharing (3 passengers)',
-                                        data: data.map(d => d.sharing_mode.passengers),
-                                        borderColor: 'rgb(255, 99, 132)',
-                                        tension: 0.1,
-                                        fill: false
-                                    }
-                                ]
-                            },
-                            options: {
-                                responsive: true,
-                                maintainAspectRatio: false,
-                                scales: {
-                                    y: {
-                                        beginAtZero: true,
-                                        title: {
-                                            display: true,
-                                            text: 'Total Passengers'
-                                        }
-                                    }
-                                },
-                                plugins: {
-                                    title: {
-                                        display: true,
-                                        text: '5 Autos Capacity Estimation'
-                                    }
-                                }
-                            }
-                        });
-                    })
-                    .catch(error => console.error('Error loading capacity data:', error));
+                    }
+                }
             }
-
-            // Initialize the chart
-            initializeCapacityChart();
         });
+
+        // Function to update capacity estimation
+        function updateCapacityEstimation() {
+            fetch('/estimate_capacity')
+                .then(response => response.json())
+                .then(data => {
+                    capacityChart.data.datasets[0].data = data.hourly_capacity;
+                    capacityChart.update();
+                    
+                    document.getElementById('avg-trip-time').textContent = 
+                        `${Math.round(data.avg_trip_time)} mins`;
+                });
+        }
+
+        // Update capacity estimation every minute
+        setInterval(updateCapacityEstimation, 60000);
+        updateCapacityEstimation();
     </script>
 </body>
 </html>

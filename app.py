@@ -6,36 +6,25 @@ from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 from simulation import SimulationManager
 import threading
 import time
-import os
-import gc
 
 app = Flask(__name__)
-simulation = None
-initialization_complete = False
 
-def initialize_simulation():
-    global simulation, initialization_complete
-    from simulation import SimulationManager
-    DELHI_METRO_STATION = (28.6438, 77.1129)
-    simulation = SimulationManager(metro_station=DELHI_METRO_STATION)
-    initialization_complete = True
-
-# Start initialization in background
-init_thread = threading.Thread(target=initialize_simulation)
-init_thread.start()
+# Initialize simulation
+DELHI_METRO_STATION = (28.6438, 77.1129)  # Changed to Tagore Garden Metro Station
+simulation = SimulationManager(metro_station=DELHI_METRO_STATION)
 
 def run_simulation():
-    batch_size = 5  # Process 5 steps at once
     while True:
         if simulation.is_running:
-            for _ in range(batch_size):
-                simulation.simulation_step()
-        time.sleep(0.2)  # Update every 200ms instead of every second
+            simulation.simulation_step()
+        time.sleep(1)
+
+# Start simulation in background thread
+simulation_thread = threading.Thread(target=run_simulation, daemon=True)
+simulation_thread.start()
 
 @app.route('/')
 def index():
-    if not initialization_complete:
-        return "Application is initializing... Please refresh in a few seconds.", 503
     # Render the main map page
     initial_location = [28.6438, 77.1129]  # Default location (Delhi)
     map = folium.Map(location=initial_location, zoom_start=12)
@@ -102,34 +91,45 @@ def optimize_route():
     return jsonify({'route': full_path_coords})
 @app.route('/simulation_state')
 def get_simulation_state():
-    if not initialization_complete:
-        return jsonify({'error': 'Initializing'}), 503
     state = simulation.get_simulation_state()
     
-    response = {
-        'time': state['time'],
-        'autos': [{
-            'id': auto.id,
-            'location': auto.current_loc,
-            'status': auto.status.value,
-            'passenger_ids': [p.id for p in auto.current_passengers],
-            'route': [(simulation.G.nodes[node]['y'], simulation.G.nodes[node]['x']) 
-                     for node in (auto.route or [])]  # Removed route point limit
-        } for auto in state['autos'].values()],
-        'requests': [{
-            'id': req.id,
-            'pickup': req.pickup_loc,
-            'status': req.status.value,
-            'assigned_auto': req.assigned_auto
-        } for req in state['requests'].values()],
-        'ride_sharing': state['ride_sharing'],
-        'picked_up_count': len([r for r in state['requests'].values() 
-                              if r.status.value == 'in_vehicle']),
-        'completed_count': len([r for r in state['requests'].values() 
-                              if r.status.value == 'completed'])
-    }
+    # Count picked up and completed requests
+    picked_up_count = len([r for r in state['requests'].values() 
+                          if r.status.value == 'in_vehicle'])
+    completed_count = len([r for r in state['requests'].values() 
+                          if r.status.value == 'completed'])
     
-    return jsonify(response)
+    return jsonify({
+        'time': state['time'],
+        'autos': [
+            {
+                'id': auto.id,
+                'location': auto.current_loc,
+                'status': auto.status.value,
+                'passenger_ids': [p.id for p in auto.current_passengers],
+                'route': [(simulation.G.nodes[node]['y'], simulation.G.nodes[node]['x']) 
+                         for node in (auto.route or [])] if auto.route else [],
+                'pickup_queue': [
+                    {
+                        'id': req.id,
+                        'route': [(simulation.G.nodes[node]['y'], simulation.G.nodes[node]['x']) 
+                                for node in nx.shortest_path(simulation.G, auto.current_node, req.pickup_node, weight='travel_time')]
+                    } for req in auto.pickup_queue
+                ] if auto.pickup_queue else []
+            } for auto in state['autos'].values()
+        ],
+        'requests': [
+            {
+                'id': req.id,
+                'pickup': req.pickup_loc,
+                'status': req.status.value,
+                'assigned_auto': req.assigned_auto
+            } for req in state['requests'].values()
+        ],
+        'ride_sharing': state['ride_sharing'],
+        'picked_up_count': picked_up_count,
+        'completed_count': completed_count
+    })
 @app.route('/set_ride_sharing', methods=['POST'])
 def set_ride_sharing():
     data = request.json
@@ -141,18 +141,19 @@ def toggle_simulation():
     simulation.is_running = not simulation.is_running
     return jsonify({'is_running': simulation.is_running})
 
-@app.route('/capacity_estimate')
-def get_capacity_estimate():
-    hourly_data = simulation.estimate_capacity()
-    return jsonify(hourly_data)
+@app.route('/get_boundary')
+def get_boundary():
+    boundary_coords = []
+    for node in simulation.boundary_nodes:
+        boundary_coords.append([
+            simulation.G.nodes[node]['y'],
+            simulation.G.nodes[node]['x']
+        ])
+    return jsonify({'boundary': boundary_coords})
 
-@app.route('/health')
-def health_check():
-    return jsonify({
-        'status': 'ready' if initialization_complete else 'initializing',
-        'simulation_running': simulation.is_running if initialization_complete else False
-    })
+@app.route('/estimate_capacity')
+def get_capacity_estimation():
+    return jsonify(simulation.estimate_capacity())
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(debug=True)

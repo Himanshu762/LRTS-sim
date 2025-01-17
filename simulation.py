@@ -45,38 +45,21 @@ class Auto:
         if self.pickup_queue is None:
             self.pickup_queue = []
 class SimulationManager:
-    def __init__(self, metro_station: Tuple[float, float], radius_km: float = 4.0, num_autos: int = 5):
+    def __init__(self, metro_station: Tuple[float, float], path_length_km: float = 2.5, num_autos: int = 5):
         self.metro_station = metro_station
-        self.radius_km = 2.5
+        self.path_length_km = path_length_km
         self.num_autos = 5
         
-        # Initialize graph
-        self.G = ox.graph_from_point(
-            metro_station, 
-            dist=radius_km * 1000, 
-            network_type="drive",
-            simplify=False,
-            retain_all=True,
-            truncate_by_edge=True
-        )
-        
-        # Calculate speeds and travel times
-        for _, _, data in self.G.edges(data=True):
-            data['speed_kph'] = data.get('maxspeed', 30)
-            if isinstance(data['speed_kph'], list):
-                data['speed_kph'] = float(data['speed_kph'][0])
-            if isinstance(data['speed_kph'], str):
-                data['speed_kph'] = float(data['speed_kph'].split()[0])
-            data['travel_time'] = data['length'] / (data['speed_kph'] * 1000 / 3600)
-        
-        # Strip node attributes
-        for _, data in self.G.nodes(data=True):
-            keep = {'x': data['x'], 'y': data['y']}
-            data.clear()
-            data.update(keep)
+        # Initialize graph with larger area to ensure coverage
+        self.G = ox.graph_from_point(metro_station, dist=5000, network_type="drive")
+        self.G = ox.add_edge_speeds(self.G)
+        self.G = ox.add_edge_travel_times(self.G)
         
         # Find metro station node
         self.metro_node = ox.distance.nearest_nodes(self.G, metro_station[1], metro_station[0])
+        
+        # Generate polygon vertices using network distance
+        self.boundary_nodes = self.generate_boundary_nodes()
         
         # Initialize state
         self.requests = {}
@@ -84,7 +67,7 @@ class SimulationManager:
         self.request_counter = 0
         self.enable_ride_sharing = False
         self.simulation_time = 0
-        self.update_interval = 1  # seconds
+        self.update_interval = 1
         self.is_running = False
 
     def initialize_autos(self) -> Dict[int, Auto]:
@@ -97,27 +80,96 @@ class SimulationManager:
                 status=AutoStatus.IDLE
             )
         return autos
-    def generate_random_request(self) -> Request:
-        # Generate random point within radius
-        angle = random.uniform(0, 2 * np.pi)
-        r = random.uniform(0, self.radius_km)
+
+    def generate_boundary_nodes(self):
+        # Increase number of vertices for better precision
+        angles = np.linspace(0, 2*np.pi, 675, endpoint=False)  # 32 points instead of 8
+        boundary_nodes = []
         
-        # Convert to cartesian coordinates
-        dx = r * np.cos(angle)
-        dy = r * np.sin(angle)
+        # Get all nodes within max path length
+        reachable_nodes = nx.single_source_dijkstra_path_length(
+            self.G, 
+            self.metro_node, 
+            cutoff=self.path_length_km * 1000,  # Convert to meters
+            weight='length'
+        )
         
-        # Convert to lat/lon
-        lat = self.metro_station[0] + (dy / 111)  # Approximate conversion
-        lon = self.metro_station[1] + (dx / (111 * np.cos(np.radians(self.metro_station[0]))))
+        target_distance = self.path_length_km * 1000  # Target distance in meters
+        distance_tolerance = 50  # 50 meters tolerance
         
-        # Debug print
-        print(f"Generated request at: [{lat}, {lon}]")
+        for angle in angles:
+            # Calculate target coordinates
+            search_radius = 0.05  # Larger search radius in degrees
+            target_x = self.metro_station[1] + np.cos(angle) * search_radius
+            target_y = self.metro_station[0] + np.sin(angle) * search_radius
+            
+            # Find candidate nodes in the direction
+            candidates = []
+            for node, distance in reachable_nodes.items():
+                if abs(distance - target_distance) <= distance_tolerance:
+                    node_y = self.G.nodes[node]['y']
+                    node_x = self.G.nodes[node]['x']
+                    
+                    # Calculate angle to this node
+                    node_angle = np.arctan2(
+                        node_y - self.metro_station[0],
+                        node_x - self.metro_station[1]
+                    )
+                    
+                    # Normalize angles for comparison
+                    angle_diff = abs(np.mod(node_angle - angle + np.pi, 2*np.pi) - np.pi)
+                    
+                    if angle_diff < np.pi/16:  # Accept nodes within ±11.25 degrees
+                        candidates.append((
+                            node,
+                            angle_diff,
+                            abs(distance - target_distance)
+                        ))
+            
+            if candidates:
+                # Select best candidate based on both angle and distance accuracy
+                best_node = min(candidates, key=lambda x: x[1] * 100 + x[2])[0]
+                boundary_nodes.append(best_node)
         
-        pickup_node = ox.distance.nearest_nodes(self.G, lon, lat)
+        # Ensure the boundary is complete by connecting adjacent points
+        final_boundary = []
+        for i in range(len(boundary_nodes)):
+            current_node = boundary_nodes[i]
+            next_node = boundary_nodes[(i + 1) % len(boundary_nodes)]
+            
+            # Get path between adjacent boundary points
+            try:
+                path = nx.shortest_path(self.G, current_node, next_node, weight='length')
+                final_boundary.extend(path[:-1])  # Exclude last node to avoid duplicates
+            except nx.NetworkXNoPath:
+                final_boundary.append(current_node)
+        
+        return final_boundary
+
+    def generate_random_request(self):
+        # Get all nodes within path length
+        reachable_nodes = nx.single_source_dijkstra_path_length(
+            self.G, 
+            self.metro_node, 
+            cutoff=self.path_length_km * 1000,  # Convert to meters
+            weight='length'
+        )
+        
+        # Filter nodes to ensure they're within path length limit
+        valid_nodes = [node for node, dist in reachable_nodes.items() 
+                      if dist <= self.path_length_km * 1000]
+        
+        if not valid_nodes:
+            return None
+        
+        # Select random node
+        pickup_node = random.choice(valid_nodes)
+        pickup_lat = self.G.nodes[pickup_node]['y']
+        pickup_lon = self.G.nodes[pickup_node]['x']
         
         request = Request(
             id=self.request_counter,
-            pickup_loc=[lat, lon],  # Changed to list format for JSON serialization
+            pickup_loc=[pickup_lat, pickup_lon],
             pickup_node=pickup_node,
             created_time=self.simulation_time,
             status=RideStatus.WAITING
@@ -125,76 +177,150 @@ class SimulationManager:
         
         self.request_counter += 1
         return request
-    def find_nearest_available_auto(self, request: Request) -> Auto:
-        min_score = float('inf')
-        nearest_auto = None
-        
-        # Pre-calculate request's distance to metro
-        try:
-            request_metro_dist = nx.shortest_path_length(
-                self.G,
-                request.pickup_node,
-                self.metro_node,
-                weight='travel_time'
-            )
-        except nx.NetworkXNoPath:
-            request_metro_dist = float('inf')
-        
-        # Use set for faster lookups
-        assigned_pickups = {
-            p.pickup_node 
-            for auto in self.autos.values() 
-            for p in (auto.current_passengers + auto.pickup_queue)
-        }
 
-        # Find best available auto based on combined score
+    def find_nearest_available_auto(self, request: Request, consider_ride_sharing: bool = True) -> Auto:
+        min_distance = float('inf')
+        nearest_auto = None
+        assigned_pickups = set()
+
+        # Track all assigned pickup points
         for auto in self.autos.values():
+            for passenger in auto.current_passengers:
+                assigned_pickups.add(passenger.pickup_node)
+            for queued in auto.pickup_queue:
+                assigned_pickups.add(queued.pickup_node)
+
+        for auto in self.autos.values():
+            # Check if auto is available based on status and capacity
             if auto.status == AutoStatus.IDLE or (
-                self.enable_ride_sharing and 
+                consider_ride_sharing and 
                 len(auto.current_passengers) + len(auto.pickup_queue) < 2 and
-                request.pickup_node not in assigned_pickups and
-                auto.status == AutoStatus.MOVING_TO_PICKUP
+                request.pickup_node not in assigned_pickups
             ):
                 try:
-                    # Calculate auto's current distance to metro
-                    auto_metro_dist = nx.shortest_path_length(
-                        self.G,
-                        auto.current_node,
-                        self.metro_node,
+                    distance = nx.shortest_path_length(
+                        self.G, 
+                        auto.current_node, 
+                        request.pickup_node, 
                         weight='travel_time'
                     )
-                    
-                    # Calculate distance from auto to request
-                    auto_request_dist = nx.shortest_path_length(
-                        self.G,
-                        auto.current_node,
-                        request.pickup_node,
-                        weight='travel_time'
-                    )
-
-                    # Calculate efficiency score (lower is better)
-                    # Consider:
-                    # 1. Distance from auto to request
-                    # 2. Distance from request to metro
-                    # 3. Auto's current distance to metro
-                    # 4. Current passenger count
-                    passenger_factor = 1.0 if len(auto.current_passengers) == 0 else 0.7
-                    
-                    score = (
-                        (0.3 * auto_request_dist) +  # Weight for pickup distance
-                        (0.3 * request_metro_dist) +  # Weight for request-to-metro distance
-                        (0.3 * auto_metro_dist) +    # Weight for auto's distance to metro
-                        (0.1 * passenger_factor)      # Small weight for passenger optimization
-                    )
-
-                    if score < min_score:
-                        min_score = score
+                    if distance < min_distance:
+                        min_distance = distance
                         nearest_auto = auto
-
                 except nx.NetworkXNoPath:
                     continue
 
         return nearest_auto
+
+    def check_request_proximity(self, request1: Request, request2: Request) -> float:
+        try:
+            return nx.shortest_path_length(
+                self.G,
+                request1.pickup_node,
+                request2.pickup_node,
+                weight='length'  # Use actual distance in meters
+            )
+        except nx.NetworkXNoPath:
+            return float('inf')
+
+    def process_requests(self):
+        # Get all waiting requests
+        waiting_requests = [r for r in self.requests.values() if r.status == RideStatus.WAITING]
+        
+        if not waiting_requests:
+            return
+
+        # Sort requests by creation time
+        waiting_requests.sort(key=lambda x: x.created_time)
+
+        # Process requests based on the number of waiting requests
+        if len(waiting_requests) >= 4:
+            # Case 1: 4th request after 1st pickup
+            first_request = waiting_requests[0]
+            if any(auto.current_passengers for auto in self.autos.values()):
+                self.process_fourth_request(waiting_requests[3])
+                
+            # Case 2: 3rd & 4th request after 1st pickup
+            elif len(waiting_requests) >= 2:
+                self.process_third_fourth_requests(waiting_requests[2:4])
+                
+        # Case 3: Regular processing for other requests
+        for request in waiting_requests:
+            self.process_single_request(request)
+
+    def process_fourth_request(self, request: Request):
+        # Sort 3rd and 4th requests
+        third_request = next(r for r in self.requests.values() 
+                            if r.status == RideStatus.WAITING 
+                            and r.created_time < request.created_time)
+        
+        distance = self.check_request_proximity(third_request, request)
+        
+        if distance <= 1000:  # 1km threshold
+            # Try to assign to same auto
+            auto = self.find_nearest_available_auto(third_request)
+            if auto and len(auto.current_passengers) + len(auto.pickup_queue) < 2:
+                self.assign_request_to_auto(request, auto)
+        else:
+            # Assign to nearest available auto
+            auto = self.find_nearest_available_auto(request, consider_ride_sharing=False)
+            if auto:
+                self.assign_request_to_auto(request, auto)
+
+    def process_third_fourth_requests(self, requests: List[Request]):
+        if len(requests) < 2:
+            return
+        
+        third_request, fourth_request = requests
+        distance = self.check_request_proximity(third_request, fourth_request)
+        
+        # Check if requests can be served within 20 minutes
+        try:
+            total_time = nx.shortest_path_length(
+                self.G,
+                third_request.pickup_node,
+                fourth_request.pickup_node,
+                weight='travel_time'
+            )
+            
+            if total_time <= 1200:  # 20 minutes in seconds
+                # Assign to same auto if possible
+                auto = self.find_nearest_available_auto(third_request)
+                if auto and len(auto.current_passengers) + len(auto.pickup_queue) < 2:
+                    self.assign_request_to_auto(third_request, auto)
+                    self.assign_request_to_auto(fourth_request, auto)
+                    return
+        except nx.NetworkXNoPath:
+            pass
+        
+        # Assign to separate autos
+        for request in [third_request, fourth_request]:
+            auto = self.find_nearest_available_auto(request, consider_ride_sharing=False)
+            if auto:
+                self.assign_request_to_auto(request, auto)
+
+    def process_single_request(self, request: Request):
+        auto = self.find_nearest_available_auto(request)
+        if auto:
+            self.assign_request_to_auto(request, auto)
+
+    def assign_request_to_auto(self, request: Request, auto: Auto):
+        request.status = RideStatus.ASSIGNED
+        request.assigned_auto = auto.id
+        
+        if auto.status == AutoStatus.IDLE:
+            auto.current_passengers.append(request)
+            auto.status = AutoStatus.MOVING_TO_PICKUP
+            auto.route = nx.shortest_path(
+                self.G, 
+                auto.current_node, 
+                request.pickup_node, 
+                weight='travel_time'
+            )
+            auto.route_index = 0
+        else:
+            auto.pickup_queue.append(request)
+
     def update_auto_location(self, auto: Auto):
         if not auto.route or auto.route_index >= len(auto.route):
             # If there are more pickups in queue, set route to next pickup
@@ -255,118 +381,67 @@ class SimulationManager:
                 auto.route = None
                 auto.pickup_queue = []
     def simulation_step(self):
-        # Batch process requests
-        if self.simulation_time % 5 == 0:  # Process every 5 steps
-            # Clean up old completed requests
-            if self.simulation_time % 60 == 0:
-                current_time = self.simulation_time
-                self.requests = {
-                    k: v for k, v in self.requests.items() 
-                    if v.status != RideStatus.COMPLETED or 
-                    current_time - v.created_time < 300
-                }
-            
-            # Generate new requests (batch generation)
-            for _ in range(5):  # Generate 5 requests at once if probability matches
-                if random.random() < 0.1:
-                    request = self.generate_random_request()
-                    self.requests[request.id] = request
+        # Generate new requests
+        if random.random() < 0.1:  # 10% chance of new request per step
+            request = self.generate_random_request()
+            self.requests[request.id] = request
 
-            # Process waiting requests in batch
-            waiting_requests = [r for r in self.requests.values() if r.status == RideStatus.WAITING]
-            for request in waiting_requests[:5]:  # Process max 5 requests per step
-                auto = self.find_nearest_available_auto(request)
-                if auto:
-                    request.status = RideStatus.ASSIGNED
-                    request.assigned_auto = auto.id
-                
-                if auto.status == AutoStatus.IDLE:
-                    # First pickup for idle auto
-                    auto.current_passengers.append(request)
-                    auto.status = AutoStatus.MOVING_TO_PICKUP
-                    auto.route = nx.shortest_path(
-                        self.G, auto.current_node, request.pickup_node, weight='travel_time'
-                    )
-                    auto.route_index = 0
-                elif self.enable_ride_sharing:
-                    # Add to pickup queue for ride sharing
-                    auto.pickup_queue.append(request)
-                    # Calculate and store the route for visualization
-                    if len(auto.pickup_queue) == 1:
-                        request.route = nx.shortest_path(
-                            self.G, auto.current_node, request.pickup_node, weight='travel_time'
-                        )
+        # Process all requests using new logic
+        self.process_requests()
+
         # Update auto locations
         for auto in self.autos.values():
             self.update_auto_location(auto)
 
         self.simulation_time += self.update_interval
     # For capacity estimation, define a separate function that doesn't slow the simulation:
-    def estimate_capacity(self, hours=3):
-        # Constants for calculation
-        num_autos = 5  # Fixed number of autos
-        avg_speed_kmh = 20  # Average speed in km/h
-        avg_pickup_time = 2  # Minutes per pickup
-        avg_dropoff_time = 2  # Minutes per dropoff
+    def estimate_capacity(self):
+        # Peak hours capacity estimation
+        peak_hours = {
+            '7AM': 1.2,  # 20% more demand
+            '8AM': 1.5,  # 50% more demand
+            '9AM': 1.2,
+            '5PM': 1.3,
+            '6PM': 1.6,  # Highest demand
+            '7PM': 1.4,
+            '8PM': 1.2,
+            '9PM': 1.0
+        }
         
-        # Calculate average trip metrics
-        avg_trip_distance = self.radius_km * 1.4  # Factor in non-direct routes
-        avg_trip_time_mins = (avg_trip_distance / avg_speed_kmh) * 60  # Convert to minutes
+        base_capacity = 12  # Base requests per hour per auto
+        num_autos = 5
+        avg_trip_time = 17.5  # Average trip time in minutes
         
-        # Total time per trip including pickup and dropoff
-        total_trip_time = avg_trip_time_mins + avg_pickup_time + avg_dropoff_time
+        hourly_capacity = []
+        for hour, demand_factor in peak_hours.items():
+            capacity = int(base_capacity * num_autos * demand_factor)
+            hourly_capacity.append(capacity)
         
-        # Calculate trips per hour per auto
-        trips_per_hour = 60 / total_trip_time
-        
-        # Calculate capacity for both normal and ride-sharing modes
-        hourly_data = []
-        for hour in range(1, hours + 1):
-            normal_trips = trips_per_hour * num_autos * hour
-            normal_passengers = normal_trips * 1  # 1 passenger per trip
-            
-            sharing_trips = trips_per_hour * num_autos * hour
-            sharing_passengers = sharing_trips * 3  # 3 passengers per trip with ride sharing
-            
-            hourly_data.append({
-                'hour': hour,
-                'normal_mode': {
-                    'trips': round(normal_trips),
-                    'passengers': round(normal_passengers)
-                },
-                'sharing_mode': {
-                    'trips': round(sharing_trips),
-                    'passengers': round(sharing_passengers)
-                }
-            })
-        
-        return hourly_data
+        return {
+            'hourly_capacity': hourly_capacity,
+            'avg_trip_time': avg_trip_time
+        }
+
+    def estimate_trip_time(self, request1: Request, request2: Request = None) -> float:
+        try:
+            if request2:
+                # Calculate combined trip time for shared ride
+                pickup_to_pickup = nx.shortest_path_length(
+                    self.G,
+                    request1.pickup_node,
+                    request2.pickup_node,
+                    weight='travel_time'
+                )
+                return pickup_to_pickup + 900  # Add 15 minutes base time
+            else:
+                # Single trip estimation
+                return 900  # 15 minutes base time
+        except nx.NetworkXNoPath:
+            return float('inf')
     def get_simulation_state(self):
-        # Only return essential data
         return {
             'time': self.simulation_time,
-            'autos': {
-                k: Auto(
-                    id=v.id,
-                    current_loc=v.current_loc,
-                    current_node=v.current_node,
-                    status=v.status,
-                    current_passengers=v.current_passengers[:],  # Shallow copy
-                    route=v.route[:] if v.route else None,  # Shallow copy
-                    pickup_queue=v.pickup_queue[:] if v.pickup_queue else None  # Shallow copy
-                )
-                for k, v in self.autos.items()
-            },
-            'requests': {
-                k: Request(
-                    id=v.id,
-                    pickup_loc=v.pickup_loc,
-                    pickup_node=v.pickup_node,
-                    created_time=v.created_time,
-                    status=v.status,
-                    assigned_auto=v.assigned_auto
-                )
-                for k, v in self.requests.items()
-            },
+            'autos': self.autos,
+            'requests': self.requests,
             'ride_sharing': self.enable_ride_sharing
         }
