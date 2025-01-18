@@ -404,8 +404,7 @@ class SimulationManager:
             '5PM': 1.3,
             '6PM': 1.6,  # Highest demand
             '7PM': 1.4,
-            '8PM': 1.2,
-            '9PM': 1.0
+            '8PM': 1.2
         }
         
         base_capacity = 12  # Base requests per hour per auto
