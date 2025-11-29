@@ -9,3 +9,6 @@ geopandas==0.14.3
 pandas==2.2.1
 Shapely==2.0.3
 Rtree==1.2.0 
+scikit-learn==1.7.2
+scipy==1.16.3
+joblib==1.4.2
