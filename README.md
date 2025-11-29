@@ -20,42 +20,6 @@ This repository helps explore:
 
 - Python (simulation logic, data processing)
 - HTML (static or templated visualization)
-- Procfile (deployment process specification)
-
-## Suggested Structure
-
-```
-simulation/
-  engine.py
-  models/
-    zone.py
-    fleet.py
-    demand.py
-  analytics/
-    metrics.py
-templates/
-  index.html
-  zones.html
-static/
-  css/
-  js/
-screenshots/
-  sim-screenshot.png
-Procfile
-```
-
-## Getting Started
-
-```bash
-git clone https://github.com/Himanshu762/LRTS-sim.git
-cd LRTS-sim
-python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-python simulation/engine.py  # or flask/fastapi launcher if applicable
-```
-
-Open the served HTML (or generated reports) in a browser to inspect simulation results.
 
 ## Core Concepts
 
@@ -71,32 +35,19 @@ Open the served HTML (or generated reports) in a browser to inspect simulation r
 3. Integrate real data: create adapters under `analytics/`.
 4. Export results: add CSV/JSON writers or simple APIs.
 
-## Sample Metrics (Hypothetical)
+## Simulation Metrics
 
-- Mean Wait Time
-- Fleet Utilization %
-- Subscription Tier Adoption
-- Zone Saturation Ratio
+### Simulation Status
+- **Time**: Current simulation time.
+- **Active Autos**: Number of autos currently active (e.g., 2/5).
+- **Pending Requests**: Number of requests waiting for assignment.
+- **Picked Requests**: Number of requests currently in transit.
+- **Completed Requests**: Total number of requests served.
+- **Ride Sharing**: Status of ride-sharing logic (Enabled/Disabled).
 
-## Deployment
-
-If using a platform like Heroku (Procfile suggests this):
-```bash
-heroku create
-git push heroku main
-heroku open
-```
-(Adjust for current hosting providers if different.)
-
-## Contributing
-
-- Document new parameters in README or a `docs/` folder.
-- Provide reproducible seeds for stochastic simulations.
-- Include unit tests for deterministic functions (e.g., cost calculators).
-
-## License
-
-Add a LICENSE file (MIT / Apache-2.0 / etc.) to clarify usage.
+### Capacity Analysis
+- **Estimated Capacity**: Projected requests per hour across different times of day (7AM - 9PM).
+- **Average Trip Time**: Estimated average duration of a trip (e.g., 18 mins).
 
 ## Acknowledgements
 
