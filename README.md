@@ -6,9 +6,9 @@ LRTS-sim is a lightweight simulation environment for modeling and visualizing Lo
 
 ## Simulation Screenshot (Image 5)
 
-![Simulation Map & Capacity Analysis](screenshot/screenshot.png)
+![Simulation Map & Capacity Analysis](screenshots/screenshot.png)
 
-(Ensure the file exists at `screenshot/screenshot.png`. This image demonstrates live zone coverage, trip states, and capacity analysis.)
+(Ensure the file exists at `screenshots/screenshot.png`. This image demonstrates live zone coverage, trip states, and capacity analysis.)
 
 ## Purpose
 
